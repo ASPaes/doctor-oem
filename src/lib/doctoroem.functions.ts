@@ -431,8 +431,9 @@ function extrairModulosECusto(
     const modulos = rawModulos
       .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
       .map((m, i) => {
+        const ativoRaw = m.ativo ?? m.Ativo;
         const ativo =
-          m.ativo === true || m.ativo === "true" || m.ativo === 1 || m.Ativo === true;
+          ativoRaw == null ? true : ativoRaw === true || ativoRaw === "true" || ativoRaw === 1;
         const quantidade = Number(m.quantidade ?? m.Quantidade ?? 1) || 1;
         const valorUnitario = Number(m.valorUnitario ?? m.ValorUnitario ?? 0) || 0;
         const valorTotal =
