@@ -241,6 +241,25 @@ function getRawModulosFromLicenciamento(
   return undefined;
 }
 
+function unwrapLicenciamentoPayload(raw: Record<string, unknown>): Record<string, unknown> {
+  const response = raw.response && typeof raw.response === "object" && !Array.isArray(raw.response)
+    ? (raw.response as Record<string, unknown>)
+    : undefined;
+  const responseData = response?.data && typeof response.data === "object" && !Array.isArray(response.data)
+    ? (response.data as Record<string, unknown>)
+    : undefined;
+  const data = raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
+    ? (raw.data as Record<string, unknown>)
+    : undefined;
+
+  return {
+    ...raw,
+    ...(response ?? {}),
+    ...(responseData ?? {}),
+    ...(data ?? {}),
+  };
+}
+
 function mapModuloApiToStorage(modulo: Record<string, unknown>, index: number): Record<string, unknown> {
   const quantidade = getModuloQuantidade(modulo);
   const valorUnitario = getModuloValorUnitario(modulo);
