@@ -420,17 +420,21 @@ function mapLicenciamentoToRow(
   const bool = (v: unknown): boolean | undefined =>
     typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
 
-  const cpfCnpj = str(lic.cpfCnpj ?? lic.cnpjCpf ?? lic.cpf_cnpj);
-  const nomeLoja = str(lic.nomeLoja ?? lic.nomeFantasia ?? lic.nomefilial);
+  const cpfCnpj = str(
+    lic.cpfCnpj ?? lic.CpfCnpj ?? lic.cnpjCpf ?? lic.CnpjCpf ?? lic.cpf_cnpj ?? lic.cnpj ?? lic.Cnpj ?? lic.documento,
+  );
+  const nomeLoja = str(
+    lic.nomeLoja ?? lic.NomeLoja ?? lic.nome ?? lic.Nome ?? lic.nomeFantasia ?? lic.NomeFantasia ?? lic.nomefilial ?? lic.NomeFilial,
+  );
   // Sem CNPJ nem nome não há como identificar o cliente — descarta.
   if (!cpfCnpj && !nomeLoja) return null;
 
-  const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado) ?? false;
-  const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
+  const bloqueado = bool(lic.bloquearLicenca ?? lic.BloquearLicenca ?? lic.bloqueado ?? lic.Bloqueado) ?? false;
+  const pdvComandas = num(lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas);
 
   const row: Record<string, unknown> = {
-    empresa_codigo: String(num(lic.codEmpresa) ?? codEmpresa),
-    filial_codigo: String(num(lic.codFilial) ?? codFilial),
+    empresa_codigo: String(num(lic.codEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
+    filial_codigo: String(num(lic.codFilial ?? lic.CodFilial) ?? codFilial),
     cnpj_cpf: cpfCnpj ?? `${codEmpresa}/${codFilial}`,
     nome_fantasia: nomeLoja ?? `Empresa ${codEmpresa}/${codFilial}`,
     bloqueado,
@@ -438,30 +442,30 @@ function mapLicenciamentoToRow(
     last_sync: new Date().toISOString(),
   };
 
-  const razao = str(lic.razaoSocial ?? lic.razao_social);
+  const razao = str(lic.razaoSocial ?? lic.RazaoSocial ?? lic.razao_social);
   if (razao) row.razao_social = razao;
-  const grupo = str(lic.grupoEconomico ?? lic.nomegrupo);
+  const grupo = str(lic.grupoEconomico ?? lic.GrupoEconomico ?? lic.nomegrupo ?? lic.NomeGrupo);
   if (grupo) row.grupo_economico = grupo;
-  const produto = str(lic.produto ?? lic.produtoPrincipal);
+  const produto = str(lic.produto ?? lic.Produto ?? lic.produtoPrincipal ?? lic.ProdutoPrincipal);
   if (produto) row.produto_principal = produto;
-  const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
+  const filiais = num(lic.numeroFiliais ?? lic.NumeroFiliais ?? lic.qtdFiliais ?? lic.QtdFiliais);
   if (filiais !== undefined) row.numero_filiais = filiais;
-  const usuarios = num(lic.usuariosAdicionais);
+  const usuarios = num(lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
-  const qtdPdv = num(lic.qtdPdv ?? lic.pdvs);
+  const qtdPdv = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs);
   if (qtdPdv !== undefined) row.qtd_pdv = qtdPdv;
-  const qtdComandas = num(lic.qtdComandas ?? lic.comandas);
+  const qtdComandas = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
   if (qtdComandas !== undefined) row.qtd_comandas = qtdComandas;
   if (pdvComandas !== undefined) row.qtd_pdv_comandas = pdvComandas;
-  const motivo = str(lic.motivoBloqueio);
+  const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
-  const custo = num(lic.custoTotal ?? lic.valorTotal);
+  const custo = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
   if (custo !== undefined) row.custo_total = custo;
-  if (Array.isArray(lic.modulosAtivos ?? lic.modulos)) {
-    row.modulos_ativos = lic.modulosAtivos ?? lic.modulos;
+  if (Array.isArray(lic.modulosAtivos ?? lic.ModulosAtivos ?? lic.modulos ?? lic.Modulos)) {
+    row.modulos_ativos = lic.modulosAtivos ?? lic.ModulosAtivos ?? lic.modulos ?? lic.Modulos;
   }
-  if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
-    row.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
+  if (Array.isArray(lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe)) {
+    row.licencas_detalhe = lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe;
   }
 
   return row;
@@ -588,13 +592,13 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
         ? (raw.data as Record<string, unknown>)
         : raw;
 
-    console.log("[OEM bulkSync] payload real recebido:", JSON.stringify(lic).slice(0, 400));
+    console.log("JSON RETORNADO:", JSON.stringify(raw));
 
     // 5) Mapeia o JSON real e atualiza por cima do registro.
     const row = mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL);
     if (!row) {
       throw new Error(
-        "OEM API: a resposta real não trouxe campos identificáveis (cpfCnpj/nomeLoja). O registro ficou como Pendente Sincronização.",
+        `OEM API: campos não identificados. JSON recebido: ${JSON.stringify(raw).substring(0, 150)}`,
       );
     }
 
