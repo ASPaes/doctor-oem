@@ -227,108 +227,143 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (curErr) throw new Error(`DoctorOEM forceSync (load): ${curErr.message}`);
     if (!current) return null;
 
-    // 2) Chama a API real do Software OEM (PDVLegal/Fiweb) via GET.
-    const FALLBACK_BASE = "https://api.pdvlegal.com.br/api";
-    const rawBase = (process.env.OEM_API_BASE_URL ?? FALLBACK_BASE).trim();
+    const currentRow = current as ClienteRow;
+
+    // 2) Credenciais obrigatórias para o fluxo OAuth2.
     const clientId = process.env.OEM_CLIENT_ID;
     const clientSecret = process.env.OEM_CLIENT_SECRET;
-    if (!clientId || !clientSecret) {
+    const username = process.env.OEM_API_USERNAME;
+    const password = process.env.OEM_API_PASSWORD;
+    if (!clientId || !clientSecret || !username || !password) {
       throw new Error(
-        "OEM API: variáveis OEM_CLIENT_ID e/ou OEM_CLIENT_SECRET ausentes nos secrets.",
+        "OEM API: secrets OEM_CLIENT_ID, OEM_CLIENT_SECRET, OEM_API_USERNAME e OEM_API_PASSWORD são obrigatórios.",
       );
     }
 
-    const currentRow = current as ClienteRow;
-    const cnpj = currentRow.cnpj_cpf;
-    const cnpjDigits = normalizeDigits(cnpj);
+    const API_ORIGIN = "https://api.pdvlegal.com.br";
 
-    // Normaliza a base: remove barras finais e qualquer placeholder colado por engano.
-    const apiUrl = rawBase
-      .replace(/\{[^}]*\}\/?$/g, "")
-      .replace(/\/+$/g, "");
-
-    // Chamada real à API OEM com fallback gracioso para dados simulados quando a rota
-    // oficial ainda não estiver disponível (404 / 401 / 403 / falha de rede).
-    const url = new URL(`${apiUrl}/oem/configuracoes`);
-    const headers: Record<string, string> = {
-      Accept: "application/json",
+    // 3) ETAPA 1 — Autenticação OAuth2 (password grant) para obter o access_token.
+    const tokenBody = new URLSearchParams({
+      username,
+      password,
+      grant_type: "password",
       client_id: clientId,
       client_secret: clientSecret,
+    });
+
+    console.log("[OEM forceSync] OAuth2: solicitando token em", `${API_ORIGIN}/token`);
+    const tokenResp = await fetch(`${API_ORIGIN}/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: tokenBody.toString(),
+    });
+
+    if (!tokenResp.ok) {
+      const text = await tokenResp.text().catch(() => "");
+      console.error("[OEM forceSync] falha na autenticação:", {
+        status: tokenResp.status,
+        preview: text.slice(0, 200),
+      });
+      throw new Error(
+        `OEM API: falha na autenticação OAuth2 (HTTP ${tokenResp.status}). Verifique usuário/senha e credenciais do client.`,
+      );
+    }
+
+    const tokenJson = (await tokenResp.json().catch(() => ({}))) as Record<string, unknown>;
+    const accessToken = typeof tokenJson.access_token === "string" ? tokenJson.access_token : null;
+    if (!accessToken) {
+      throw new Error("OEM API: resposta de token sem o campo access_token.");
+    }
+    console.log("[OEM forceSync] OAuth2: access_token obtido com sucesso.");
+
+    // 4) ETAPA 2 — Consulta real de licenciamento usando o token.
+    const licUrl = `${API_ORIGIN}/v1/licenciamento/${encodeURIComponent(
+      currentRow.empresa_codigo,
+    )}/${encodeURIComponent(currentRow.filial_codigo)}`;
+
+    console.log("[OEM forceSync] GET licenciamento:", redactSensitiveUrl(licUrl));
+    const licResp = await fetch(licUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+
+    if (!licResp.ok) {
+      const text = await licResp.text().catch(() => "");
+      console.error("[OEM forceSync] falha na consulta de licenciamento:", {
+        status: licResp.status,
+        preview: text.slice(0, 200),
+      });
+      throw new Error(
+        `OEM API: consulta de licenciamento falhou (HTTP ${licResp.status}) para empresa ${currentRow.empresa_codigo}/${currentRow.filial_codigo}.`,
+      );
+    }
+
+    const raw = (await licResp.json().catch(() => ({}))) as Record<string, unknown>;
+    // Algumas APIs envelopam o objeto em "data".
+    const lic = (raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
+      ? (raw.data as Record<string, unknown>)
+      : raw) as Record<string, unknown>;
+
+    console.log("[OEM forceSync] payload real recebido:", JSON.stringify(lic).slice(0, 400));
+
+    // 5) Mapeia o retorno real (codEmpresa, codFilial, nomeLoja, cpfCnpj,
+    //    bloquearLicenca, pdvComandas, ...) para as colunas de clientes_oem.
+    const str = (v: unknown): string | undefined =>
+      typeof v === "string" && v.trim() !== "" ? v : undefined;
+    const num = (v: unknown): number | undefined => {
+      const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
+      return Number.isFinite(n) ? n : undefined;
     };
+    const bool = (v: unknown): boolean | undefined =>
+      typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
 
-    let payload: Record<string, unknown> | null = null;
-    let usedMock = false;
-
-    try {
-      const safeUrl = redactSensitiveUrl(url.toString());
-      console.log("[OEM forceSync] disparo real:", { url: safeUrl, method: "GET", cnpj_cpf: cnpjDigits });
-
-      const resp = await fetch(url.toString(), { method: "GET", headers });
-
-      if (resp.ok) {
-        payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-        console.log("[OEM forceSync] sucesso na API real.");
-      } else {
-        const text = await resp.text().catch(() => "");
-        console.warn("[OEM forceSync] API indisponível, usando mock:", {
-          status: resp.status,
-          statusText: resp.statusText,
-          responsePreview: text.slice(0, 200),
-        });
-        usedMock = true;
-      }
-    } catch (e) {
-      console.warn("[OEM forceSync] erro de rede, usando mock:", (e as Error).message);
-      usedMock = true;
-    }
-
-    if (usedMock || !payload) {
-      // Mock rico simulando resposta da TabletCloud enquanto a rota oficial não é confirmada.
-      payload = {
-        razao_social: currentRow.razao_social ?? "Cliente Demonstração TabletCloud",
-        nome_fantasia: currentRow.nome_fantasia ?? "TabletCloud Demo",
-        produto_principal: "PDVLegal",
-        status: "Ativo",
-        bloqueado: false,
-        motivo_bloqueio: null,
-        numero_filiais: 1,
-        usuarios_adicionais: 3,
-        qtd_pdv: 5,
-        qtd_comandas: 10,
-        qtd_pdv_comandas: 15,
-        custo_total: 749.9,
-        modulos_ativos: ["NF-e", "NFC-e", "Estoque", "Financeiro"],
-        licencas_detalhe: [
-          { tipo: "PDV", quantidade: 5, status: "Ativo" },
-          { tipo: "Comanda", quantidade: 10, status: "Ativo" },
-          { tipo: "NF-e", quantidade: 1, status: "Ativo" },
-          { tipo: "NFC-e", quantidade: 1, status: "Ativo" },
-        ],
-      };
-    }
-
-    // 3) Faz upsert/update apenas das colunas permitidas que vieram no payload.
-    const allowed = [
-      "razao_social",
-      "nome_fantasia",
-      "grupo_economico",
-      "produto_principal",
-      "numero_filiais",
-      "status",
-      "bloqueado",
-      "motivo_bloqueio",
-      "usuarios_adicionais",
-      "qtd_pdv",
-      "qtd_comandas",
-      "qtd_pdv_comandas",
-      "custo_total",
-      "modulos_ativos",
-      "licencas_detalhe",
-    ] as const;
+    const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado);
+    const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
 
     const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
-    for (const key of allowed) {
-      if (key in payload && payload[key] !== undefined) update[key] = payload[key];
+
+    const empresaCodigo = str(lic.codEmpresa) ?? num(lic.codEmpresa)?.toString();
+    const filialCodigo = str(lic.codFilial) ?? num(lic.codFilial)?.toString();
+    if (empresaCodigo) update.empresa_codigo = empresaCodigo;
+    if (filialCodigo) update.filial_codigo = filialCodigo;
+    const nomeLoja = str(lic.nomeLoja ?? lic.nomeFantasia);
+    if (nomeLoja) update.nome_fantasia = nomeLoja;
+    const razao = str(lic.razaoSocial ?? lic.razao_social);
+    if (razao) update.razao_social = razao;
+    const cpfCnpj = str(lic.cpfCnpj ?? lic.cnpjCpf);
+    if (cpfCnpj) update.cnpj_cpf = cpfCnpj;
+    const grupo = str(lic.grupoEconomico ?? lic.nomegrupo);
+    if (grupo) update.grupo_economico = grupo;
+    const produto = str(lic.produto ?? lic.produtoPrincipal);
+    if (produto) update.produto_principal = produto;
+    const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
+    if (filiais !== undefined) update.numero_filiais = filiais;
+    const usuarios = num(lic.usuariosAdicionais);
+    if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
+    const qtdPdv = num(lic.qtdPdv ?? lic.pdvs);
+    if (qtdPdv !== undefined) update.qtd_pdv = qtdPdv;
+    const qtdComandas = num(lic.qtdComandas ?? lic.comandas);
+    if (qtdComandas !== undefined) update.qtd_comandas = qtdComandas;
+    if (pdvComandas !== undefined) update.qtd_pdv_comandas = pdvComandas;
+    if (bloqueado !== undefined) {
+      update.bloqueado = bloqueado;
+      update.status = bloqueado ? "Bloqueado" : "Ativo";
+    }
+    const motivo = str(lic.motivoBloqueio);
+    if (motivo) update.motivo_bloqueio = motivo;
+    const custo = num(lic.custoTotal ?? lic.valorTotal);
+    if (custo !== undefined) update.custo_total = custo;
+    if (Array.isArray(lic.modulosAtivos ?? lic.modulos)) {
+      update.modulos_ativos = lic.modulosAtivos ?? lic.modulos;
+    }
+    if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
+      update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
     }
 
     const { data: row, error } = await supabase
