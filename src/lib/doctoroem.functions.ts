@@ -727,8 +727,11 @@ function mapLicenciamentoToRow(
   // Sem CNPJ nem nome não há como identificar o cliente — descarta.
   if (!cpfCnpj && !nomeLoja) return null;
 
-  const bloqueado = bool(lic.bloquearLicenca ?? lic.BloquearLicenca ?? lic.bloqueado ?? lic.Bloqueado) ?? false;
-  const pdvComandas = num(lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas);
+  const bloqueado =
+    bool(lic.bloquearLicenca ?? lic.BloquearLicenca ?? filialObj?.bloqueado ?? lic.bloqueado ?? lic.Bloqueado) ?? false;
+  const pdvComandas = num(
+    filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas,
+  );
 
   const row: Record<string, unknown> = {
     empresa_codigo: String(num(lic.codEmpresa ?? lic.codeEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
@@ -748,7 +751,7 @@ function mapLicenciamentoToRow(
   if (produto) row.produto_principal = produto;
   const filiais = num(lic.numeroFiliais ?? lic.NumeroFiliais ?? lic.qtdFiliais ?? lic.QtdFiliais);
   if (filiais !== undefined) row.numero_filiais = filiais;
-  const usuarios = num(lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
+  const usuarios = num(filialObj?.usuarios ?? lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
   const qtdPdvApi = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
   const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(lic);
@@ -763,7 +766,10 @@ function mapLicenciamentoToRow(
   if (modulosNorm) row.modulos_ativos = modulosNorm;
   const qtdComandasApi = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
   row.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
-  row.custo_total = custoModulos ?? num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ?? 0;
+  row.custo_total =
+    custoModulos ??
+    num(filialObj?.valorTotal ?? lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ??
+    0;
   if (Array.isArray(lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe)) {
     row.licencas_detalhe = lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe;
   }
