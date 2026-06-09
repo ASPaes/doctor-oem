@@ -376,22 +376,25 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (produto) update.produto_principal = produto;
     const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
     if (filiais !== undefined) update.numero_filiais = filiais;
-    const usuarios = num(lic.usuariosAdicionais);
+    const usuarios = num(lic.usuarios ?? lic.usuariosAdicionais);
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
-    const qtdPdv = num(lic.qtdPdv ?? lic.pdvs);
+    const qtdPdv = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
     if (qtdPdv !== undefined) update.qtd_pdv = qtdPdv;
-    const qtdComandas = num(lic.qtdComandas ?? lic.comandas);
+    const qtdComandas = num(lic.qtdComandas ?? lic.comandas) ?? pdvComandas;
     if (qtdComandas !== undefined) update.qtd_comandas = qtdComandas;
     if (pdvComandas !== undefined) update.qtd_pdv_comandas = pdvComandas;
     update.bloqueado = bloqueado ?? false;
     update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
     if (motivo) update.motivo_bloqueio = motivo;
-    const custo = num(lic.custoTotal ?? lic.valorTotal);
+    const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+      lic,
+      produto,
+      qtdPdv,
+    );
+    if (modulosNorm) update.modulos_ativos = modulosNorm;
+    const custo = num(lic.custoTotal ?? lic.valorTotal) ?? custoModulos;
     if (custo !== undefined) update.custo_total = custo;
-    if (Array.isArray(lic.modulosAtivos ?? lic.modulos)) {
-      update.modulos_ativos = lic.modulosAtivos ?? lic.modulos;
-    }
     if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
       update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
     }
