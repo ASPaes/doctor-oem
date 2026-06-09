@@ -125,31 +125,56 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (curErr) throw new Error(`DoctorOEM forceSync (load): ${curErr.message}`);
     if (!current) return null;
 
-    // 2) Chama a API real do Software OEM.
-    const baseUrl = process.env.OEM_API_BASE_URL;
+    // 2) Chama a API real do Software OEM (TabletCloud).
+    const rawBase = process.env.OEM_API_BASE_URL;
     const clientId = process.env.OEM_CLIENT_ID;
     const clientSecret = process.env.OEM_CLIENT_SECRET;
-    if (!baseUrl || !clientId || !clientSecret) {
+    if (!rawBase || !clientId || !clientSecret) {
       throw new Error(
         "OEM API: variáveis OEM_API_BASE_URL, OEM_CLIENT_ID e/ou OEM_CLIENT_SECRET ausentes nos secrets.",
       );
     }
 
-    const cnpj = (current as ClienteRow).cnpj_cpf;
+    // Normaliza a URL: remove espaços, barras finais e qualquer placeholder de cnpj
+    // que possa ter sido colado no secret por engano (ex.: ".../oem_licenciamentos/{cnpj}").
+    const apiUrl = rawBase
+      .trim()
+      .replace(/\{[^}]*\}\/?$/g, "")
+      .replace(/\/+$/g, "");
 
-    const resp = await fetch(baseUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: clientId,
-        client_secret: clientSecret,
-        cnpj_cpf: cnpj,
-      }),
+    const method = "POST" as const;
+    const cnpj = (current as ClienteRow).cnpj_cpf;
+    const requestBody = JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      cnpj_cpf: cnpj,
+    });
+
+    console.log("[OEM forceSync] disparo:", {
+      url: apiUrl,
+      method,
+      cnpj_cpf: cnpj,
+      bodyKeys: ["client_id", "client_secret", "cnpj_cpf"],
+    });
+
+    const resp = await fetch(apiUrl, {
+      method,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: requestBody,
     });
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error(`OEM API ${resp.status}: ${text.slice(0, 300)}`);
+      console.error("[OEM forceSync] falha:", {
+        url: apiUrl,
+        method,
+        status: resp.status,
+        statusText: resp.statusText,
+        responsePreview: text.slice(0, 500),
+      });
+      throw new Error(
+        `OEM API ${resp.status} em ${method} ${apiUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
+      );
     }
 
     const payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
