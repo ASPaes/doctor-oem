@@ -518,7 +518,9 @@ function calcularComandas(
         Boolean(m.ativo) &&
         /MESA|COMANDA|FICHA/i.test(String(m.nome ?? "")),
     );
-    return mesaAtiva ? 1 : 0;
+    if (mesaAtiva) return 1;
+    // Padrão: 1 se houver qualquer módulo ativo (licença em operação), senão 0.
+    return modulos.some((m) => Boolean(m.ativo)) ? 1 : 0;
   }
   return 1;
 }
