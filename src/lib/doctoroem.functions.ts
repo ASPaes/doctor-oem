@@ -127,32 +127,24 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 
     // 2) Chama a API real do Software OEM.
     const baseUrl = process.env.OEM_API_BASE_URL;
-    const apiKey = process.env.OEM_API_KEY;
-    const method = (process.env.OEM_API_METHOD ?? "POST").toUpperCase() === "GET" ? "GET" : "POST";
-    if (!baseUrl || !apiKey) {
+    const clientId = process.env.OEM_CLIENT_ID;
+    const clientSecret = process.env.OEM_CLIENT_SECRET;
+    if (!baseUrl || !clientId || !clientSecret) {
       throw new Error(
-        "OEM API: variáveis OEM_API_BASE_URL e/ou OEM_API_KEY ausentes nos secrets.",
+        "OEM API: variáveis OEM_API_BASE_URL, OEM_CLIENT_ID e/ou OEM_CLIENT_SECRET ausentes nos secrets.",
       );
     }
 
     const cnpj = (current as ClienteRow).cnpj_cpf;
-    const url = new URL(baseUrl);
-    if (method === "GET") {
-      url.searchParams.set("cnpj_cpf", cnpj);
-      url.searchParams.set("id", data.id);
-    }
 
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "X-API-Key": apiKey,
-    };
-
-    const resp = await fetch(url.toString(), {
-      method,
-      headers,
-      body: method === "POST" ? JSON.stringify({ id: data.id, cnpj_cpf: cnpj }) : undefined,
+    const resp = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        cnpj_cpf: cnpj,
+      }),
     });
 
     if (!resp.ok) {
