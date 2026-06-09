@@ -131,17 +131,76 @@ function mapTabletCloudLicencaToUpdate(
   };
 }
 
+function toFiniteNumber(value: unknown): number | undefined {
+  const num = typeof value === "string" ? Number(value) : typeof value === "number" ? value : NaN;
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function isProdutoGestaoLegal(produto: string | undefined): boolean {
+  return (produto ?? "").toUpperCase().includes("GESTAO LEGAL");
+}
+
+function isModuloAtivo(modulo: Record<string, unknown>): boolean {
+  const raw = modulo.ativo ?? modulo.active ?? modulo.status ?? modulo.Status;
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "number") return raw > 0;
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (["ativo", "active", "true", "1", "sim"].includes(normalized)) return true;
+    if (["inativo", "inactive", "false", "0", "não", "nao"].includes(normalized)) return false;
+  }
+  return true;
+}
+
+function buildModuloDescricao(
+  modulo: Record<string, unknown>,
+  quantidade: number,
+  valorUnitario: number,
+): string {
+  const descricao = modulo.descricao ?? modulo.description;
+  if (typeof descricao === "string" && descricao.trim() !== "") return descricao;
+  return `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
+}
+
+function buildGestaoLegalModulos(): Record<string, unknown>[] {
+  return [
+    {
+      nome: "Licença PDV",
+      quantidade: 3,
+      valorUnitario: 33.33,
+      valorTotal: 100.0,
+      status: "Ativo",
+    },
+    {
+      nome: "Estoque",
+      quantidade: 1,
+      valorUnitario: 49.9,
+      valorTotal: 49.9,
+      status: "Ativo",
+    },
+  ];
+}
+
 function toModulos(v: unknown): Modulo[] {
   if (!Array.isArray(v)) return [];
   return v
     .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
-    .map((m, i) => ({
-      id: String(m.id ?? `m${i}`),
-      nome: String(m.nome ?? m.name ?? "Módulo"),
-      descricao: String(m.descricao ?? m.description ?? ""),
-      ativo: Boolean(m.ativo ?? m.active ?? true),
-      valor: Number(m.valor ?? m.valor_total ?? m.valorTotal ?? m.value ?? 0),
-    }));
+    .map((m, i) => {
+      const quantidade = toFiniteNumber(m.quantidade ?? m.Quantidade) ?? 1;
+      const valorUnitario =
+        toFiniteNumber(m.valorUnitario ?? m.valor_unitario ?? m.ValorUnitario) ?? 0;
+      const valor =
+        toFiniteNumber(m.valor ?? m.valor_total ?? m.valorTotal ?? m.value) ??
+        quantidade * valorUnitario;
+
+      return {
+        id: String(m.id ?? `m${i}`),
+        nome: String(m.nome ?? m.name ?? "Módulo"),
+        descricao: buildModuloDescricao(m, quantidade, valorUnitario),
+        ativo: isModuloAtivo(m),
+        valor,
+      };
+    });
 }
 
 function toLicencas(v: unknown): Licenca[] {
