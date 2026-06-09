@@ -43,7 +43,7 @@ function ClientesList() {
     mutationFn: () => bulkSync(),
     onSuccess: (res) => {
       toast.success(
-        `🎉 Cliente real TabletCloud (31626/38259) sincronizado com sucesso! ${res.inserted > 0 ? "Novo registro criado" : "Registro existente atualizado"} com os dados de produção.`,
+        `🎉 Carga total concluída! ${res.updated} cliente(s) atualizado(s), ${res.inserted} novo(s) capturado(s) na varredura (${res.scanned} consultas ao OEM).`,
       );
       queryClient.invalidateQueries({ queryKey: ["doctoroem", "clientes"] });
     },
