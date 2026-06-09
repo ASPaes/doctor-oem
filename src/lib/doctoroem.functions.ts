@@ -463,10 +463,30 @@ function extrairModulosECusto(
     return { modulos, custo: Math.round(custo * 100) / 100 };
   }
 
-  // Regra de negócios temporária enquanto o GET não retorna `modulos`.
+  // Regra de negócios real para GESTAO LEGAL enquanto o GET não retorna `modulos`:
+  // distribui os R$ 149,90 entre Estoque (1 × R$ 49,90) e Mesa/Ficha (3 × R$ 33,33 = R$ 100,00).
   if ((produto ?? "").toUpperCase().includes("GESTAO LEGAL")) {
-    const custo = pdvs && pdvs > 0 ? Math.round(pdvs * 29.9 * 100) / 100 : 149.9;
-    return { custo };
+    const modulos: Record<string, unknown>[] = [
+      {
+        id: "estoque",
+        nome: "Estoque",
+        descricao: "Qtde 1 × R$ 49,90 (unitário)",
+        ativo: true,
+        valor: 49.9,
+        quantidade: 1,
+        valorUnitario: 49.9,
+      },
+      {
+        id: "mesa-ficha",
+        nome: "Mesa/Ficha",
+        descricao: "Qtde 3 × R$ 33,33 (unitário)",
+        ativo: true,
+        valor: 100.0,
+        quantidade: 3,
+        valorUnitario: 33.33,
+      },
+    ];
+    return { modulos, custo: 149.9 };
   }
 
   return {};
