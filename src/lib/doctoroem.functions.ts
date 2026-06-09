@@ -280,9 +280,33 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     console.log("[OEM forceSync] OAuth2: access_token obtido com sucesso.");
 
     // 4) ETAPA 2 — Consulta real de licenciamento usando o token.
-    const licUrl = `${API_ORIGIN}/v1/licenciamento/${encodeURIComponent(
-      currentRow.empresa_codigo,
-    )}/${encodeURIComponent(currentRow.filial_codigo)}`;
+    //    Extrai códigos numéricos: suporta "EMP-2004/001", "2004", 2004 etc.
+    function extractCodigoEmpresa(v: unknown): number | null {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      const s = typeof v === "string" ? v.trim() : "";
+      if (!s) return null;
+      const m = s.match(/EMP-(\d+)/i);
+      if (m) return parseInt(m[1], 10);
+      const n = parseInt(s.replace(/\D/g, ""), 10);
+      return Number.isFinite(n) ? n : null;
+    }
+    function extractCodigoFilial(v: unknown): number | null {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      const s = typeof v === "string" ? v.trim() : "";
+      if (!s) return null;
+      const n = parseInt(s.replace(/\D/g, ""), 10);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    const codEmpresa = extractCodigoEmpresa(currentRow.empresa_codigo);
+    const codFilial = extractCodigoFilial(currentRow.filial_codigo);
+    if (codEmpresa == null || codFilial == null) {
+      throw new Error(
+        `OEM API: não foi possível extrair códigos numéricos de empresa/filial a partir de "${currentRow.empresa_codigo}" / "${currentRow.filial_codigo}".`,
+      );
+    }
+
+    const licUrl = `${API_ORIGIN}/v1/licenciamento/${codEmpresa}/${codFilial}`;
 
     console.log("[OEM forceSync] GET licenciamento:", redactSensitiveUrl(licUrl));
     const licResp = await fetch(licUrl, {
