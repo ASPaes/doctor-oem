@@ -383,8 +383,6 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
     const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
     update.qtd_pdv = qtdPdv;
-    const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas) ?? pdvComandas;
-    update.qtd_comandas = qtdComandasApi && qtdComandasApi > 0 ? qtdComandasApi : qtdPdv;
     update.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
     update.bloqueado = bloqueado ?? false;
     update.status = bloqueado ? "Bloqueado" : "Ativo";
@@ -396,6 +394,9 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
       qtdPdv,
     );
     if (modulosNorm) update.modulos_ativos = modulosNorm;
+    // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
+    const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
+    update.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
     // Custo: zero/indefinido da API NÃO pode vencer o valor calculado.
     const custoApi = num(lic.custoTotal ?? lic.valorTotal);
     let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
