@@ -14,6 +14,7 @@ import { Route as GatewayRouteImport } from './routes/gateway'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClientesIndexRouteImport } from './routes/clientes.index'
 import { Route as ClientesIdRouteImport } from './routes/clientes.$id'
+import { Route as ApiPublicOemSyncRouteImport } from './routes/api/public/oem-sync'
 
 const UsuariosRoute = UsuariosRouteImport.update({
   id: '/usuarios',
@@ -40,6 +41,11 @@ const ClientesIdRoute = ClientesIdRouteImport.update({
   path: '/clientes/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicOemSyncRoute = ApiPublicOemSyncRouteImport.update({
+  id: '/api/public/oem-sync',
+  path: '/api/public/oem-sync',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -47,6 +53,7 @@ export interface FileRoutesByFullPath {
   '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes/': typeof ClientesIndexRoute
+  '/api/public/oem-sync': typeof ApiPublicOemSyncRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByTo {
   '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes': typeof ClientesIndexRoute
+  '/api/public/oem-sync': typeof ApiPublicOemSyncRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,12 +70,25 @@ export interface FileRoutesById {
   '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes/': typeof ClientesIndexRoute
+  '/api/public/oem-sync': typeof ApiPublicOemSyncRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/gateway' | '/usuarios' | '/clientes/$id' | '/clientes/'
+  fullPaths:
+    | '/'
+    | '/gateway'
+    | '/usuarios'
+    | '/clientes/$id'
+    | '/clientes/'
+    | '/api/public/oem-sync'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/gateway' | '/usuarios' | '/clientes/$id' | '/clientes'
+  to:
+    | '/'
+    | '/gateway'
+    | '/usuarios'
+    | '/clientes/$id'
+    | '/clientes'
+    | '/api/public/oem-sync'
   id:
     | '__root__'
     | '/'
@@ -75,6 +96,7 @@ export interface FileRouteTypes {
     | '/usuarios'
     | '/clientes/$id'
     | '/clientes/'
+    | '/api/public/oem-sync'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -83,6 +105,7 @@ export interface RootRouteChildren {
   UsuariosRoute: typeof UsuariosRoute
   ClientesIdRoute: typeof ClientesIdRoute
   ClientesIndexRoute: typeof ClientesIndexRoute
+  ApiPublicOemSyncRoute: typeof ApiPublicOemSyncRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -122,6 +145,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClientesIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/oem-sync': {
+      id: '/api/public/oem-sync'
+      path: '/api/public/oem-sync'
+      fullPath: '/api/public/oem-sync'
+      preLoaderRoute: typeof ApiPublicOemSyncRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -131,7 +161,18 @@ const rootRouteChildren: RootRouteChildren = {
   UsuariosRoute: UsuariosRoute,
   ClientesIdRoute: ClientesIdRoute,
   ClientesIndexRoute: ClientesIndexRoute,
+  ApiPublicOemSyncRoute: ApiPublicOemSyncRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
