@@ -347,24 +347,32 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const bool = (v: unknown): boolean | undefined =>
       typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
 
-    const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado);
-    const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
+  const filialObjSync =
+    lic.filial && typeof lic.filial === "object" && !Array.isArray(lic.filial)
+      ? (lic.filial as Record<string, unknown>)
+      : undefined;
+
+  const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado);
+  const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
 
     const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
 
-    const empresaCodigo = str(lic.codEmpresa) ?? num(lic.codEmpresa)?.toString();
-    const filialCodigo = str(lic.codFilial) ?? num(lic.codFilial)?.toString();
+    const empresaCodigo =
+      num(lic.codEmpresa ?? lic.codeEmpresa)?.toString() ?? str(lic.codEmpresa ?? lic.codeEmpresa);
+    const filialCodigo =
+      num(lic.codFilial ?? filialObjSync?.codigo)?.toString() ??
+      str(lic.codFilial ?? filialObjSync?.codigo);
     if (empresaCodigo) update.empresa_codigo = empresaCodigo;
     if (filialCodigo) update.filial_codigo = filialCodigo;
-    const nomeLoja = str(lic.nomeLoja ?? lic.nomeFantasia);
+    const nomeLoja = str(lic.nomeEmpresa ?? lic.nomeLoja ?? lic.nomeFantasia);
     if (nomeLoja) update.nome_fantasia = nomeLoja;
-    const razao = str(lic.razaoSocial ?? lic.razao_social);
+    const razao = str(lic.razaoSocial ?? lic.razao_social ?? lic.nomeEmpresa);
     if (razao) update.razao_social = razao;
-    const cpfCnpj = str(lic.cpfCnpj ?? lic.cnpjCpf);
+    const cpfCnpj = str(lic.cnpjEmpresa ?? lic.cpfCnpj ?? lic.cnpjCpf);
     if (cpfCnpj) update.cnpj_cpf = cpfCnpj;
     const grupo = str(lic.grupoEconomico ?? lic.nomegrupo);
     if (grupo) update.grupo_economico = grupo;
-    const produto = str(lic.produto ?? lic.produtoPrincipal);
+    const produto = str(lic.nomeProduto ?? lic.produto ?? lic.produtoPrincipal);
     if (produto) update.produto_principal = produto;
     const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
     if (filiais !== undefined) update.numero_filiais = filiais;
@@ -375,10 +383,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const qtdComandas = num(lic.qtdComandas ?? lic.comandas);
     if (qtdComandas !== undefined) update.qtd_comandas = qtdComandas;
     if (pdvComandas !== undefined) update.qtd_pdv_comandas = pdvComandas;
-    if (bloqueado !== undefined) {
-      update.bloqueado = bloqueado;
-      update.status = bloqueado ? "Bloqueado" : "Ativo";
-    }
+    update.bloqueado = bloqueado ?? false;
+    update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
     if (motivo) update.motivo_bloqueio = motivo;
     const custo = num(lic.custoTotal ?? lic.valorTotal);
