@@ -462,6 +462,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const modulosNorm = isProdutoGestaoLegal(produto)
       ? buildGestaoLegalModulos()
       : modulosExtraidos;
+    console.log("[OEM forceSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
     if (modulosNorm) update.modulos_ativos = modulosNorm;
     // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
     const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
@@ -629,6 +630,7 @@ function mapLicenciamentoToRow(
   const modulosNorm = isProdutoGestaoLegal(produto)
     ? buildGestaoLegalModulos()
     : modulosExtraidos;
+  console.log("[OEM bulkSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
   if (modulosNorm) row.modulos_ativos = modulosNorm;
   // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
   const qtdComandasApi = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
