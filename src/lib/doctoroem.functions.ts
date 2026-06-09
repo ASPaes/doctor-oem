@@ -472,7 +472,44 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
     const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
     const supabase = getDoctorOemAdmin();
 
-    // 1) Credenciais obrigatórias do fluxo OAuth2.
+    // Cliente real conhecido do painel OEM da TabletCloud.
+    const COD_EMPRESA = 31626;
+    const COD_FILIAL = 38259;
+
+    // 1) Garante o registro inicial na tabela (upsert por empresa/filial).
+    const { data: existente, error: selErr } = await supabase
+      .from("clientes_oem")
+      .select("id")
+      .eq("empresa_codigo", String(COD_EMPRESA))
+      .eq("filial_codigo", String(COD_FILIAL))
+      .maybeSingle();
+    if (selErr) throw new Error(`DoctorOEM bulkSync (load): ${selErr.message}`);
+
+    let registroId = existente?.id as string | undefined;
+    let inserted = 0;
+
+    if (!registroId) {
+      const { data: novo, error: insErr } = await supabase
+        .from("clientes_oem")
+        .insert({
+          nome_fantasia: `Cliente Real TabletCloud (${COD_EMPRESA})`,
+          cnpj_cpf: "00000000000000",
+          empresa_codigo: String(COD_EMPRESA),
+          filial_codigo: String(COD_FILIAL),
+          status: "Pendente Sincronização",
+          last_sync: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
+      if (insErr) throw new Error(`DoctorOEM bulkSync (insert): ${insErr.message}`);
+      registroId = novo.id as string;
+      inserted = 1;
+      console.log("[OEM bulkSync] registro inicial criado:", registroId);
+    } else {
+      console.log("[OEM bulkSync] registro já existente, será atualizado:", registroId);
+    }
+
+    // 2) Credenciais obrigatórias do fluxo OAuth2.
     const clientId = process.env.OEM_CLIENT_ID;
     const clientSecret = process.env.OEM_CLIENT_SECRET;
     const username = process.env.OEM_API_USERNAME;
@@ -485,7 +522,7 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
 
     const API_ORIGIN = "https://api.pdvlegal.com.br";
 
-    // 2) ETAPA 1 — POST /token (password grant), igual à sync individual.
+    // 3) ETAPA 1 — POST /token (password grant), igual à sync individual.
     const tokenBody = new URLSearchParams({
       username,
       password,
@@ -522,125 +559,58 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
     }
     console.log("[OEM bulkSync] OAuth2: access_token obtido com sucesso.");
 
-    // 3) ETAPA 2 — Varredura sequencial REAL: codEmpresa 1..30 com codFilial
-    //    fixo em 1 (a grande maioria dos clientes começa pela filial 1).
-    //    As requisições são disparadas de forma assíncrona em paralelo.
-    const COD_EMPRESA_INICIO = Number(process.env.OEM_COD_EMPRESA_INICIO ?? 1);
-    const COD_EMPRESA_FIM = Number(process.env.OEM_COD_EMPRESA_FIM ?? 30);
-    const COD_FILIAL = 1;
+    // 4) ETAPA 2 — GET cirúrgico na rota de produção do cliente real.
+    const licUrl = `${API_ORIGIN}/v1/licenciamento/${COD_EMPRESA}/${COD_FILIAL}`;
+    console.log("[OEM bulkSync] GET licenciamento:", redactSensitiveUrl(licUrl));
 
-    const empresas: number[] = [];
-    for (let cod = COD_EMPRESA_INICIO; cod <= COD_EMPRESA_FIM; cod++) empresas.push(cod);
+    const licResp = await fetch(licUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
 
-    console.log(
-      `[OEM bulkSync] iniciando varredura assíncrona: empresas ${COD_EMPRESA_INICIO}..${COD_EMPRESA_FIM}, filial ${COD_FILIAL}.`,
-    );
-
-    const resultados = await Promise.all(
-      empresas.map(async (codEmpresa): Promise<Record<string, unknown>[]> => {
-        const licUrl = `${API_ORIGIN}/v1/licenciamento/${codEmpresa}/${COD_FILIAL}`;
-
-        let resp: Response;
-        try {
-          resp = await fetch(licUrl, {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: "application/json",
-            },
-          });
-        } catch (e) {
-          console.error(
-            "[OEM bulkSync] erro de rede na empresa",
-            codEmpresa,
-            (e as Error).message,
-          );
-          return [];
-        }
-
-        if (!resp.ok) {
-          console.warn("[OEM bulkSync] empresa", codEmpresa, "retornou HTTP", resp.status);
-          return [];
-        }
-
-        const raw = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-        const payload =
-          raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
-            ? (raw.data as Record<string, unknown>)
-            : raw;
-
-        // A rota pode devolver um objeto único ou uma lista de licenciamentos.
-        const items: Record<string, unknown>[] = Array.isArray(raw.data)
-          ? (raw.data as Record<string, unknown>[])
-          : [payload];
-
-        const rows: Record<string, unknown>[] = [];
-        for (const item of items) {
-          const row = mapLicenciamentoToRow(item, codEmpresa, COD_FILIAL);
-          if (row) {
-            console.log(
-              "[OEM bulkSync] licenciamento real mapeado (empresa",
-              codEmpresa,
-              "):",
-              JSON.stringify(item).slice(0, 300),
-            );
-            rows.push(row);
-          }
-        }
-        return rows;
-      }),
-    );
-
-    const scanned = empresas.length;
-    const encontrados: Record<string, unknown>[] = resultados.flat();
-
-    console.log(
-      `[OEM bulkSync] varredura concluída: ${scanned} rotas testadas, ${encontrados.length} licenciamentos reais.`,
-    );
-
-    if (encontrados.length === 0) {
+    if (!licResp.ok) {
+      const text = await licResp.text().catch(() => "");
+      console.error("[OEM bulkSync] falha na consulta de licenciamento:", {
+        status: licResp.status,
+        preview: text.slice(0, 200),
+      });
       throw new Error(
-        `OEM API: varredura em /v1/licenciamento/{${COD_EMPRESA_INICIO}..${COD_EMPRESA_FIM}}/${COD_FILIAL} não retornou nenhum licenciamento (${scanned} empresas testadas). Nenhum dado fictício foi inserido.`,
+        `OEM API: consulta de licenciamento falhou (HTTP ${licResp.status}) para ${COD_EMPRESA}/${COD_FILIAL}. O registro inicial ficou salvo como "Pendente Sincronização".`,
       );
     }
 
-    // 4) Identifica quais CNPJs já existem para diferenciar insert/update.
-    const cnpjs = encontrados.map((r) => r.cnpj_cpf as string);
-    const { data: existing, error: selErr } = await supabase
+    const raw = (await licResp.json().catch(() => ({}))) as Record<string, unknown>;
+    const lic =
+      raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
+        ? (raw.data as Record<string, unknown>)
+        : raw;
+
+    console.log("[OEM bulkSync] payload real recebido:", JSON.stringify(lic).slice(0, 400));
+
+    // 5) Mapeia o JSON real e atualiza por cima do registro.
+    const row = mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL);
+    if (!row) {
+      throw new Error(
+        "OEM API: a resposta real não trouxe campos identificáveis (cpfCnpj/nomeLoja). O registro ficou como Pendente Sincronização.",
+      );
+    }
+
+    const { error: updErr } = await supabase
       .from("clientes_oem")
-      .select("id, cnpj_cpf")
-      .in("cnpj_cpf", cnpjs);
-    if (selErr) throw new Error(`DoctorOEM bulkSync (load): ${selErr.message}`);
+      .update(row)
+      .eq("id", registroId);
+    if (updErr) throw new Error(`DoctorOEM bulkSync (update): ${updErr.message}`);
 
-    const existingByCnpj = new Map<string, string>();
-    for (const row of existing ?? []) {
-      existingByCnpj.set(row.cnpj_cpf as string, row.id as string);
-    }
-
-    const toInsert = encontrados.filter((r) => !existingByCnpj.has(r.cnpj_cpf as string));
-    const toUpdate = encontrados.filter((r) => existingByCnpj.has(r.cnpj_cpf as string));
-
-    // 5) Insere os novos em lote.
-    if (toInsert.length > 0) {
-      const { error: insErr } = await supabase.from("clientes_oem").insert(toInsert);
-      if (insErr) throw new Error(`DoctorOEM bulkSync (insert): ${insErr.message}`);
-    }
-
-    // 6) Atualiza os existentes individualmente (mantém o id).
-    for (const r of toUpdate) {
-      const id = existingByCnpj.get(r.cnpj_cpf as string)!;
-      const { error: updErr } = await supabase
-        .from("clientes_oem")
-        .update(r)
-        .eq("id", id);
-      if (updErr) throw new Error(`DoctorOEM bulkSync (update ${r.cnpj_cpf}): ${updErr.message}`);
-    }
+    console.log("[OEM bulkSync] cliente real sincronizado com sucesso:", registroId);
 
     return {
-      inserted: toInsert.length,
-      updated: toUpdate.length,
-      total: encontrados.length,
-      scanned,
+      inserted,
+      updated: inserted === 0 ? 1 : 0,
+      total: 1,
+      scanned: 1,
     };
   },
 );
