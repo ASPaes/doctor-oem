@@ -1,10 +1,12 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ArrowLeft, Eye, RefreshCw, ShieldAlert, ShieldCheck,
   Calendar, Hash, Building2, Users, Monitor, Boxes,
 } from "lucide-react";
-import { clientesMock, formatBRL, type Cliente } from "@/lib/mock-data";
+import { formatBRL, type Cliente } from "@/lib/mock-data";
+import { getCliente, forceSyncCliente } from "@/lib/doctoroem.functions";
+import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,20 +16,22 @@ import {
 import { useRole } from "@/lib/role-context";
 import { toast } from "sonner";
 
+const clienteQueryOptions = (id: string) =>
+  queryOptions({
+    queryKey: ["doctoroem", "cliente", id],
+    queryFn: () => getCliente({ data: { id } }),
+  });
+
 export const Route = createFileRoute("/clientes/$id")({
-  head: ({ params }) => {
-    const c = clientesMock.find((x) => x.id === params.id);
-    return {
-      meta: [
-        { title: c ? `${c.nomeFantasia} · Nexus Hub` : "Cliente · Nexus Hub" },
-        { name: "description", content: "Ficha completa do cliente com licenças OEM, módulos contratados e custos." },
-      ],
-    };
-  },
-  loader: ({ params }) => {
-    const cliente = clientesMock.find((c) => c.id === params.id);
+  head: () => ({
+    meta: [
+      { title: "Cliente · Nexus Hub" },
+      { name: "description", content: "Ficha completa do cliente com licenças OEM, módulos contratados e custos." },
+    ],
+  }),
+  loader: async ({ params, context }) => {
+    const cliente = await context.queryClient.ensureQueryData(clienteQueryOptions(params.id));
     if (!cliente) throw notFound();
-    return { cliente };
   },
   component: ClienteDetalhe,
   notFoundComponent: () => (
@@ -39,26 +43,29 @@ export const Route = createFileRoute("/clientes/$id")({
 });
 
 function ClienteDetalhe() {
-  const { cliente } = Route.useLoaderData();
+  const { id } = Route.useParams();
+  const { data: clienteOrNull } = useSuspenseQuery(clienteQueryOptions(id));
+  const cliente = clienteOrNull as Cliente; // loader já garantiu não-nulo
   const { canSeeFinance } = useRole();
-  const [syncing, setSyncing] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  // Simula fetch da API OEM
-  useEffect(() => {
-    setSyncing(true);
-    const t = setTimeout(() => setSyncing(false), 1400);
-    return () => clearTimeout(t);
-  }, [cliente.id]);
-
-  function forceSync() {
-    setSyncing(true);
-    toast.message("Sincronizando com OEM...", { description: `Empresa ${cliente.codigoEmpresa}/${cliente.codigoFilial}` });
-    setTimeout(() => {
-      setSyncing(false);
-      toast.success("Dados atualizados pelo OEM");
-    }, 1600);
-  }
+  const queryClient = useQueryClient();
+  const syncMutation = useMutation({
+    mutationFn: () => forceSyncCliente({ data: { id } }),
+    onMutate: () => {
+      toast.message("Sincronizando com OEM...", {
+        description: `Empresa ${cliente.codigoEmpresa}/${cliente.codigoFilial}`,
+      });
+    },
+    onSuccess: (fresh) => {
+      if (fresh) {
+        queryClient.setQueryData(["doctoroem", "cliente", id], fresh);
+        queryClient.invalidateQueries({ queryKey: ["doctoroem", "clientes"] });
+        toast.success("Dados atualizados pelo OEM");
+      }
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+  const syncing = syncMutation.isPending;
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
@@ -66,7 +73,7 @@ function ClienteDetalhe() {
         <Link to="/clientes" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" /> Clientes
         </Link>
-        <Button onClick={forceSync} disabled={syncing} variant="outline" className="glass-panel">
+        <Button onClick={() => syncMutation.mutate()} disabled={syncing} variant="outline" className="glass-panel">
           <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
           {syncing ? "Sincronizando OEM..." : "Forçar Sincronização OEM"}
         </Button>
