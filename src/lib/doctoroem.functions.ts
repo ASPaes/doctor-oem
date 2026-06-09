@@ -249,6 +249,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const apiOrigin = getTabletCloudOrigin(rawBase);
     const tokenUrl = `${apiOrigin}/token`;
     const licenciamentoUrl = `${apiOrigin}/licenciamento/minhaslicencas/1/${encodeURIComponent(cnpj)}`;
+    const licenciamentoUrlWithToken = `${licenciamentoUrl}?token=${encodeURIComponent(accessToken)}`;
 
     console.log("[OEM forceSync] token:", {
       url: tokenUrl,
@@ -301,12 +302,12 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     }
 
     console.log("[OEM forceSync] licenciamento:", {
-      url: redactSensitiveUrl(`${licenciamentoUrl}?token=${accessToken}`),
+      url: redactSensitiveUrl(licenciamentoUrlWithToken),
       method: "GET",
       cnpj_cpf: cnpj,
     });
 
-    const resp = await fetch(licenciamentoUrl, {
+    const resp = await fetch(licenciamentoUrlWithToken, {
       method: "GET",
       headers: { Accept: "application/json" },
     });
@@ -314,14 +315,14 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       console.error("[OEM forceSync] falha licenciamento:", {
-        url: redactSensitiveUrl(licenciamentoUrl),
+        url: redactSensitiveUrl(licenciamentoUrlWithToken),
         method: "GET",
         status: resp.status,
         statusText: resp.statusText,
         responsePreview: text.slice(0, 500),
       });
       throw new Error(
-        `OEM API ${resp.status} em GET ${licenciamentoUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
+        `OEM API ${resp.status} em GET ${redactSensitiveUrl(licenciamentoUrlWithToken)} — ${text.slice(0, 200) || "(corpo vazio)"}`,
       );
     }
 
@@ -332,7 +333,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 
     if (!match) {
       throw new Error(
-        `OEM API não retornou licenciamento para o CNPJ/CPF ${cnpj} em GET ${licenciamentoUrl}.`,
+        `OEM API não retornou licenciamento para o CNPJ/CPF ${cnpj} em GET ${redactSensitiveUrl(licenciamentoUrlWithToken)}.`,
       );
     }
 
