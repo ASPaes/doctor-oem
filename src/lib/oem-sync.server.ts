@@ -59,18 +59,17 @@ export async function runScheduledOemSync(
     .eq("id", 1)
     .maybeSingle();
 
-  if (cfgErr && isTabelaAusente(cfgErr.message)) {
-    throw new Error(
-      "As tabelas de controle (oem_sync_config / oem_sync_logs) ainda não existem no banco. Rode o SQL de criação informado na tela de Configurações.",
-    );
-  }
-  if (cfgErr) throw new Error(`oem_sync_config: ${cfgErr.message}`);
+  // Se as tabelas de controle ainda não existem, seguimos com os padrões
+  // (24h, automação ativa) — a sincronização roda mesmo assim e os logs
+  // passam a ser gravados quando as tabelas forem criadas.
+  const tabelasProntas = !(cfgErr && isTabelaAusente(cfgErr.message));
+  if (cfgErr && tabelasProntas) throw new Error(`oem_sync_config: ${cfgErr.message}`);
 
   const intervaloHoras = cfg?.intervalo_horas ?? 24;
   const ativo = cfg?.ativo ?? true;
 
   // 2) Disparo via cron respeita o toggle e o intervalo configurado.
-  if (origem === "cron") {
+  if (origem === "cron" && tabelasProntas) {
     if (!ativo) {
       const result: SyncRunResult = {
         status: "ignorado",
