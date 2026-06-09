@@ -140,7 +140,7 @@ function toModulos(v: unknown): Modulo[] {
       nome: String(m.nome ?? m.name ?? "Módulo"),
       descricao: String(m.descricao ?? m.description ?? ""),
       ativo: Boolean(m.ativo ?? m.active ?? true),
-      valor: Number(m.valor ?? m.value ?? 0),
+      valor: Number(m.valor ?? m.valor_total ?? m.valorTotal ?? m.value ?? 0),
     }));
 }
 
