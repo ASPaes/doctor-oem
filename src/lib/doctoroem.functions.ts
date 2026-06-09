@@ -401,157 +401,201 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
   });
 
 // ============================================================
-// Bulk sync — popula a base com clientes fictícios usando o
-// mesmo fallback inteligente da sync individual.
+// Bulk sync — carga inicial REAL via OAuth2 + varredura de
+// licenciamentos na TabletCloud (/v1/licenciamento/{emp}/{fil}).
 // ============================================================
 
-type SeedCliente = {
-  empresa_codigo: string;
-  filial_codigo: string;
-  cnpj_cpf: string;
-  razao_social: string;
-  nome_fantasia: string;
-  grupo_economico: string;
-  produto_principal: string;
-  numero_filiais: number;
-  status: string;
-  bloqueado: boolean;
-  motivo_bloqueio: string | null;
-  usuarios_adicionais: number;
-  qtd_pdv: number;
-  qtd_comandas: number;
-  qtd_pdv_comandas: number;
-  custo_total: number;
-  modulos_ativos: string[];
-  licencas_detalhe: { tipo: string; quantidade: number; status: string }[];
-};
+/** Mapeia o payload real de /v1/licenciamento para colunas de clientes_oem. */
+function mapLicenciamentoToRow(
+  lic: Record<string, unknown>,
+  codEmpresa: number,
+  codFilial: number,
+): Record<string, unknown> | null {
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() !== "" ? v : undefined;
+  const num = (v: unknown): number | undefined => {
+    const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const bool = (v: unknown): boolean | undefined =>
+    typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
 
-const SEED_CLIENTES: SeedCliente[] = [
-  {
-    empresa_codigo: "EMP-2001",
-    filial_codigo: "001",
-    cnpj_cpf: "45.543.915/0001-81",
-    razao_social: "Mercado Central Comércio de Alimentos LTDA",
-    nome_fantasia: "Mercado Central",
-    grupo_economico: "Grupo Central Varejo",
-    produto_principal: "Doctor ERP Pro",
-    numero_filiais: 3,
-    status: "Ativo",
-    bloqueado: false,
-    motivo_bloqueio: null,
-    usuarios_adicionais: 8,
-    qtd_pdv: 12,
-    qtd_comandas: 0,
-    qtd_pdv_comandas: 12,
-    custo_total: 1890.0,
-    modulos_ativos: ["NF-e", "NFC-e", "Estoque", "Financeiro", "BI"],
-    licencas_detalhe: [
-      { tipo: "PDV", quantidade: 12, status: "Ativo" },
-      { tipo: "NF-e", quantidade: 1, status: "Ativo" },
-      { tipo: "NFC-e", quantidade: 1, status: "Ativo" },
-    ],
-  },
-  {
-    empresa_codigo: "EMP-2002",
-    filial_codigo: "001",
-    cnpj_cpf: "11.222.333/0001-44",
-    razao_social: "Posto Alvorada Combustíveis LTDA",
-    nome_fantasia: "Posto Alvorada",
-    grupo_economico: "Rede Alvorada",
-    produto_principal: "Doctor ERP Lite",
-    numero_filiais: 1,
-    status: "Ativo",
-    bloqueado: false,
-    motivo_bloqueio: null,
-    usuarios_adicionais: 2,
-    qtd_pdv: 4,
-    qtd_comandas: 0,
-    qtd_pdv_comandas: 4,
-    custo_total: 549.9,
-    modulos_ativos: ["NFC-e", "Financeiro"],
-    licencas_detalhe: [
-      { tipo: "PDV", quantidade: 4, status: "Ativo" },
-      { tipo: "NFC-e", quantidade: 1, status: "Ativo" },
-    ],
-  },
-  {
-    empresa_codigo: "EMP-2003",
-    filial_codigo: "001",
-    cnpj_cpf: "27.865.757/0001-02",
-    razao_social: "Farmácia Preço Baixo Drogarias LTDA",
-    nome_fantasia: "Farmácia Preço Baixo",
-    grupo_economico: "Grupo Saúde Popular",
-    produto_principal: "Doctor ERP Pro",
-    numero_filiais: 5,
-    status: "Ativo",
-    bloqueado: false,
-    motivo_bloqueio: null,
-    usuarios_adicionais: 12,
-    qtd_pdv: 18,
-    qtd_comandas: 0,
-    qtd_pdv_comandas: 18,
-    custo_total: 2740.5,
-    modulos_ativos: ["NF-e", "NFC-e", "Estoque", "Financeiro", "SNGPC", "BI"],
-    licencas_detalhe: [
-      { tipo: "PDV", quantidade: 18, status: "Ativo" },
-      { tipo: "NF-e", quantidade: 1, status: "Ativo" },
-      { tipo: "NFC-e", quantidade: 1, status: "Ativo" },
-      { tipo: "SNGPC", quantidade: 1, status: "Ativo" },
-    ],
-  },
-  {
-    empresa_codigo: "EMP-2004",
-    filial_codigo: "001",
-    cnpj_cpf: "33.014.556/0001-96",
-    razao_social: "Bar e Restaurante Esquina LTDA",
-    nome_fantasia: "Esquina Bar & Grill",
-    grupo_economico: "Esquina Gastronomia",
-    produto_principal: "Doctor ERP Lite",
-    numero_filiais: 1,
-    status: "Ativo",
-    bloqueado: true,
-    motivo_bloqueio: "Inadimplência 32 dias",
-    usuarios_adicionais: 4,
-    qtd_pdv: 2,
-    qtd_comandas: 24,
-    qtd_pdv_comandas: 26,
-    custo_total: 980.0,
-    modulos_ativos: ["NFC-e", "Comanda", "Financeiro"],
-    licencas_detalhe: [
-      { tipo: "PDV", quantidade: 2, status: "Ativo" },
-      { tipo: "Comanda", quantidade: 24, status: "Ativo" },
-      { tipo: "NFC-e", quantidade: 1, status: "Suspenso" },
-    ],
-  },
-];
+  const cpfCnpj = str(lic.cpfCnpj ?? lic.cnpjCpf ?? lic.cpf_cnpj);
+  const nomeLoja = str(lic.nomeLoja ?? lic.nomeFantasia ?? lic.nomefilial);
+  // Sem CNPJ nem nome não há como identificar o cliente — descarta.
+  if (!cpfCnpj && !nomeLoja) return null;
+
+  const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado) ?? false;
+  const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
+
+  const row: Record<string, unknown> = {
+    empresa_codigo: String(num(lic.codEmpresa) ?? codEmpresa),
+    filial_codigo: String(num(lic.codFilial) ?? codFilial),
+    cnpj_cpf: cpfCnpj ?? `${codEmpresa}/${codFilial}`,
+    nome_fantasia: nomeLoja ?? `Empresa ${codEmpresa}/${codFilial}`,
+    bloqueado,
+    status: bloqueado ? "Bloqueado" : "Ativo",
+    last_sync: new Date().toISOString(),
+  };
+
+  const razao = str(lic.razaoSocial ?? lic.razao_social);
+  if (razao) row.razao_social = razao;
+  const grupo = str(lic.grupoEconomico ?? lic.nomegrupo);
+  if (grupo) row.grupo_economico = grupo;
+  const produto = str(lic.produto ?? lic.produtoPrincipal);
+  if (produto) row.produto_principal = produto;
+  const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
+  if (filiais !== undefined) row.numero_filiais = filiais;
+  const usuarios = num(lic.usuariosAdicionais);
+  if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
+  const qtdPdv = num(lic.qtdPdv ?? lic.pdvs);
+  if (qtdPdv !== undefined) row.qtd_pdv = qtdPdv;
+  const qtdComandas = num(lic.qtdComandas ?? lic.comandas);
+  if (qtdComandas !== undefined) row.qtd_comandas = qtdComandas;
+  if (pdvComandas !== undefined) row.qtd_pdv_comandas = pdvComandas;
+  const motivo = str(lic.motivoBloqueio);
+  if (motivo) row.motivo_bloqueio = motivo;
+  const custo = num(lic.custoTotal ?? lic.valorTotal);
+  if (custo !== undefined) row.custo_total = custo;
+  if (Array.isArray(lic.modulosAtivos ?? lic.modulos)) {
+    row.modulos_ativos = lic.modulosAtivos ?? lic.modulos;
+  }
+  if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
+    row.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
+  }
+
+  return row;
+}
 
 export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
-  async (): Promise<{ inserted: number; updated: number; total: number }> => {
+  async (): Promise<{ inserted: number; updated: number; total: number; scanned: number }> => {
     const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
     const supabase = getDoctorOemAdmin();
 
-    // 1) Simula a chamada em lote ao parceiro — usa o mesmo fallback inteligente.
-    const FALLBACK_BASE = "https://api.pdvlegal.com.br/api";
-    const rawBase = (process.env.OEM_API_BASE_URL ?? FALLBACK_BASE).trim();
-    const apiUrl = rawBase.replace(/\{[^}]*\}\/?$/g, "").replace(/\/+$/g, "");
-    try {
-      const safeUrl = redactSensitiveUrl(`${apiUrl}/oem/empresas`);
-      console.log("[OEM bulkSync] tentativa real:", safeUrl);
-      const resp = await fetch(`${apiUrl}/oem/empresas`, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          client_id: process.env.OEM_CLIENT_ID ?? "",
-          client_secret: process.env.OEM_CLIENT_SECRET ?? "",
-        },
-      });
-      console.log("[OEM bulkSync] status real:", resp.status);
-    } catch (e) {
-      console.warn("[OEM bulkSync] rede indisponível, usando seeds:", (e as Error).message);
+    // 1) Credenciais obrigatórias do fluxo OAuth2.
+    const clientId = process.env.OEM_CLIENT_ID;
+    const clientSecret = process.env.OEM_CLIENT_SECRET;
+    const username = process.env.OEM_API_USERNAME;
+    const password = process.env.OEM_API_PASSWORD;
+    if (!clientId || !clientSecret || !username || !password) {
+      throw new Error(
+        "OEM API: secrets OEM_CLIENT_ID, OEM_CLIENT_SECRET, OEM_API_USERNAME e OEM_API_PASSWORD são obrigatórios.",
+      );
     }
 
-    // 2) Identifica quais CNPJs já existem para diferenciar insert/update.
-    const cnpjs = SEED_CLIENTES.map((s) => s.cnpj_cpf);
+    const API_ORIGIN = "https://api.pdvlegal.com.br";
+
+    // 2) ETAPA 1 — POST /token (password grant), igual à sync individual.
+    const tokenBody = new URLSearchParams({
+      username,
+      password,
+      grant_type: "password",
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+
+    console.log("[OEM bulkSync] OAuth2: solicitando token em", `${API_ORIGIN}/token`);
+    const tokenResp = await fetch(`${API_ORIGIN}/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: tokenBody.toString(),
+    });
+
+    if (!tokenResp.ok) {
+      const text = await tokenResp.text().catch(() => "");
+      console.error("[OEM bulkSync] falha na autenticação:", {
+        status: tokenResp.status,
+        preview: text.slice(0, 200),
+      });
+      throw new Error(
+        `OEM API: falha na autenticação OAuth2 (HTTP ${tokenResp.status}). Verifique usuário/senha e credenciais do client.`,
+      );
+    }
+
+    const tokenJson = (await tokenResp.json().catch(() => ({}))) as Record<string, unknown>;
+    const accessToken = typeof tokenJson.access_token === "string" ? tokenJson.access_token : null;
+    if (!accessToken) {
+      throw new Error("OEM API: resposta de token sem o campo access_token.");
+    }
+    console.log("[OEM bulkSync] OAuth2: access_token obtido com sucesso.");
+
+    // 3) ETAPA 2 — Varredura real: empresa-base 1620643, filiais 1..N.
+    //    Para a varredura após 3 misses (404) consecutivos.
+    const COD_EMPRESA_BASE = Number(process.env.OEM_COD_EMPRESA ?? 1620643);
+    const MAX_FILIAIS = 20;
+    const MAX_MISSES_CONSECUTIVOS = 3;
+
+    const encontrados: Record<string, unknown>[] = [];
+    let scanned = 0;
+    let missesConsecutivos = 0;
+
+    for (let codFilial = 1; codFilial <= MAX_FILIAIS; codFilial++) {
+      const licUrl = `${API_ORIGIN}/v1/licenciamento/${COD_EMPRESA_BASE}/${codFilial}`;
+      console.log("[OEM bulkSync] GET licenciamento:", redactSensitiveUrl(licUrl));
+      scanned++;
+
+      let resp: Response;
+      try {
+        resp = await fetch(licUrl, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
+        });
+      } catch (e) {
+        console.error("[OEM bulkSync] erro de rede na filial", codFilial, (e as Error).message);
+        missesConsecutivos++;
+        if (missesConsecutivos >= MAX_MISSES_CONSECUTIVOS) break;
+        continue;
+      }
+
+      if (!resp.ok) {
+        console.warn("[OEM bulkSync] filial", codFilial, "retornou HTTP", resp.status);
+        missesConsecutivos++;
+        if (missesConsecutivos >= MAX_MISSES_CONSECUTIVOS) break;
+        continue;
+      }
+
+      missesConsecutivos = 0;
+      const raw = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+      const payload =
+        raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
+          ? (raw.data as Record<string, unknown>)
+          : raw;
+
+      // A rota pode devolver um objeto único ou uma lista de licenciamentos.
+      const items: Record<string, unknown>[] = Array.isArray(raw.data)
+        ? (raw.data as Record<string, unknown>[])
+        : [payload];
+
+      for (const item of items) {
+        const row = mapLicenciamentoToRow(item, COD_EMPRESA_BASE, codFilial);
+        if (row) {
+          console.log(
+            "[OEM bulkSync] licenciamento real mapeado:",
+            JSON.stringify(item).slice(0, 300),
+          );
+          encontrados.push(row);
+        }
+      }
+    }
+
+    console.log(
+      `[OEM bulkSync] varredura concluída: ${scanned} rotas testadas, ${encontrados.length} licenciamentos reais.`,
+    );
+
+    if (encontrados.length === 0) {
+      throw new Error(
+        `OEM API: varredura em /v1/licenciamento/${COD_EMPRESA_BASE}/{filial} não retornou nenhum licenciamento (${scanned} rotas testadas). Nenhum dado fictício foi inserido.`,
+      );
+    }
+
+    // 4) Identifica quais CNPJs já existem para diferenciar insert/update.
+    const cnpjs = encontrados.map((r) => r.cnpj_cpf as string);
     const { data: existing, error: selErr } = await supabase
       .from("clientes_oem")
       .select("id, cnpj_cpf")
@@ -563,32 +607,30 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
       existingByCnpj.set(row.cnpj_cpf as string, row.id as string);
     }
 
-    const now = new Date().toISOString();
-    const toInsert = SEED_CLIENTES
-      .filter((s) => !existingByCnpj.has(s.cnpj_cpf))
-      .map((s) => ({ ...s, last_sync: now }));
-    const toUpdate = SEED_CLIENTES.filter((s) => existingByCnpj.has(s.cnpj_cpf));
+    const toInsert = encontrados.filter((r) => !existingByCnpj.has(r.cnpj_cpf as string));
+    const toUpdate = encontrados.filter((r) => existingByCnpj.has(r.cnpj_cpf as string));
 
-    // 3) Insere os novos em lote.
+    // 5) Insere os novos em lote.
     if (toInsert.length > 0) {
       const { error: insErr } = await supabase.from("clientes_oem").insert(toInsert);
       if (insErr) throw new Error(`DoctorOEM bulkSync (insert): ${insErr.message}`);
     }
 
-    // 4) Atualiza os existentes individualmente (mantém o id).
-    for (const s of toUpdate) {
-      const id = existingByCnpj.get(s.cnpj_cpf)!;
+    // 6) Atualiza os existentes individualmente (mantém o id).
+    for (const r of toUpdate) {
+      const id = existingByCnpj.get(r.cnpj_cpf as string)!;
       const { error: updErr } = await supabase
         .from("clientes_oem")
-        .update({ ...s, last_sync: now })
+        .update(r)
         .eq("id", id);
-      if (updErr) throw new Error(`DoctorOEM bulkSync (update ${s.cnpj_cpf}): ${updErr.message}`);
+      if (updErr) throw new Error(`DoctorOEM bulkSync (update ${r.cnpj_cpf}): ${updErr.message}`);
     }
 
     return {
       inserted: toInsert.length,
       updated: toUpdate.length,
-      total: SEED_CLIENTES.length,
+      total: encontrados.length,
+      scanned,
     };
   },
 );

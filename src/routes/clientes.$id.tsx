@@ -200,13 +200,13 @@ function MetricasCard({ cliente, syncing }: { cliente: Cliente; syncing: boolean
         <div>
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Data de cadastro</p>
           <p className="font-medium">
-            {syncing ? <Skeleton className="h-5 w-32" /> : new Date(cliente.dataCadastro).toLocaleDateString("pt-BR")}
+            {syncing ? <Skeleton className="h-5 w-32" /> : new Date(cliente.dataCadastro).toLocaleDateString("pt-BR", { timeZone: "UTC" })}
           </p>
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Ativação</p>
           <p className="font-medium">
-            {syncing ? <Skeleton className="h-5 w-40" /> : new Date(cliente.dataAtivacao).toLocaleString("pt-BR")}
+            {syncing ? <Skeleton className="h-5 w-40" /> : new Date(cliente.dataAtivacao).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}
           </p>
         </div>
       </div>
