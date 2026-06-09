@@ -62,7 +62,6 @@
 }
 
 :root {
-:root {
   --radius: 0.75rem;
   /* Futuristic dark hub palette */
   --background: oklch(0.16 0.03 265);
