@@ -450,7 +450,6 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
       lic,
       produto,
-      qtdPdv,
     );
     if (modulosNorm) update.modulos_ativos = modulosNorm;
     // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
@@ -615,7 +614,6 @@ function mapLicenciamentoToRow(
   const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
     lic,
     produto,
-    qtdPdv,
   );
   if (modulosNorm) row.modulos_ativos = modulosNorm;
   // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
