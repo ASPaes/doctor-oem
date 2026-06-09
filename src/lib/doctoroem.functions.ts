@@ -249,7 +249,6 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const apiOrigin = getTabletCloudOrigin(rawBase);
     const tokenUrl = `${apiOrigin}/token`;
     const licenciamentoUrl = `${apiOrigin}/licenciamento/minhaslicencas/1/${encodeURIComponent(cnpj)}`;
-    const licenciamentoUrlWithToken = `${licenciamentoUrl}?token=${encodeURIComponent(accessToken)}`;
 
     console.log("[OEM forceSync] token:", {
       url: tokenUrl,
@@ -300,6 +299,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
         `OEM API token inválido — ${tokenPayload.error_description ?? tokenPayload.error ?? "access_token ausente"}`,
       );
     }
+
+    const licenciamentoUrlWithToken = `${licenciamentoUrl}?token=${encodeURIComponent(accessToken)}`;
 
     console.log("[OEM forceSync] licenciamento:", {
       url: redactSensitiveUrl(licenciamentoUrlWithToken),
