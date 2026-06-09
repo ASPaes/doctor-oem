@@ -131,17 +131,84 @@ function mapTabletCloudLicencaToUpdate(
   };
 }
 
+function toFiniteNumber(value: unknown): number | undefined {
+  const num = typeof value === "string" ? Number(value) : typeof value === "number" ? value : NaN;
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function isProdutoGestaoLegal(produto: string | undefined): boolean {
+  return (produto ?? "").toUpperCase().includes("GESTAO LEGAL");
+}
+
+function isModuloAtivo(modulo: Record<string, unknown>): boolean {
+  const raw = modulo.ativo ?? modulo.active ?? modulo.status ?? modulo.Status;
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "number") return raw > 0;
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (["ativo", "active", "true", "1", "sim"].includes(normalized)) return true;
+    if (["inativo", "inactive", "false", "0", "não", "nao"].includes(normalized)) return false;
+  }
+  return true;
+}
+
+function buildModuloDescricao(
+  modulo: Record<string, unknown>,
+  quantidade: number,
+  valorUnitario: number,
+): string {
+  const descricao = modulo.descricao ?? modulo.description;
+  if (typeof descricao === "string" && descricao.trim() !== "") return descricao;
+  return `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
+}
+
+function buildGestaoLegalModulos(): Record<string, unknown>[] {
+  return [
+    {
+      id: "licenca-pdv",
+      nome: "Licença PDV",
+      descricao: "Qtde 3 × R$ 33,33 (unitário)",
+      ativo: true,
+      valor: 100.0,
+      quantidade: 3,
+      valorUnitario: 33.33,
+      valorTotal: 100.0,
+      status: "Ativo",
+    },
+    {
+      id: "estoque",
+      nome: "Estoque",
+      descricao: "Qtde 1 × R$ 49,90 (unitário)",
+      ativo: true,
+      valor: 49.9,
+      quantidade: 1,
+      valorUnitario: 49.9,
+      valorTotal: 49.9,
+      status: "Ativo",
+    },
+  ];
+}
+
 function toModulos(v: unknown): Modulo[] {
   if (!Array.isArray(v)) return [];
   return v
     .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
-    .map((m, i) => ({
-      id: String(m.id ?? `m${i}`),
-      nome: String(m.nome ?? m.name ?? "Módulo"),
-      descricao: String(m.descricao ?? m.description ?? ""),
-      ativo: Boolean(m.ativo ?? m.active ?? true),
-      valor: Number(m.valor ?? m.valor_total ?? m.valorTotal ?? m.value ?? 0),
-    }));
+    .map((m, i) => {
+      const quantidade = toFiniteNumber(m.quantidade ?? m.Quantidade) ?? 1;
+      const valorUnitario =
+        toFiniteNumber(m.valorUnitario ?? m.valor_unitario ?? m.ValorUnitario) ?? 0;
+      const valor =
+        toFiniteNumber(m.valor ?? m.valor_total ?? m.valorTotal ?? m.value) ??
+        quantidade * valorUnitario;
+
+      return {
+        id: String(m.id ?? `m${i}`),
+        nome: String(m.nome ?? m.name ?? "Módulo"),
+        descricao: buildModuloDescricao(m, quantidade, valorUnitario),
+        ativo: isModuloAtivo(m),
+        valor,
+      };
+    });
 }
 
 function toLicencas(v: unknown): Licenca[] {
@@ -380,7 +447,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
     // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
     const qtdPdvApi = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
-    const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
+    const pdvFallback = isProdutoGestaoLegal(produto) ? 3 : 1;
     const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
     update.qtd_pdv = qtdPdv;
     update.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
@@ -388,11 +455,14 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
     if (motivo) update.motivo_bloqueio = motivo;
-    const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+    const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
       lic,
       produto,
-      qtdPdv,
     );
+    const modulosNorm = isProdutoGestaoLegal(produto)
+      ? buildGestaoLegalModulos()
+      : modulosExtraidos;
+    console.log("[OEM forceSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
     if (modulosNorm) update.modulos_ativos = modulosNorm;
     // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
     const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
@@ -401,7 +471,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const custoApi = num(lic.custoTotal ?? lic.valorTotal);
     let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
     if (!custo || custo <= 0) {
-      custo = (produto ?? "").toUpperCase().includes("GESTAO LEGAL")
+      custo = isProdutoGestaoLegal(produto)
         ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
         : Math.round(qtdPdv * 29.9 * 100) / 100;
     }
@@ -434,71 +504,40 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 function extrairModulosECusto(
   lic: Record<string, unknown>,
   produto: string | undefined,
-  pdvs: number | undefined,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
   const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
+
+  if (isProdutoGestaoLegal(produto)) {
+    return { modulos: buildGestaoLegalModulos(), custo: 149.9 };
+  }
 
   if (Array.isArray(rawModulos) && rawModulos.length > 0) {
     const modulos = rawModulos
       .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
       .map((m, i) => {
-        const ativoRaw = m.ativo ?? m.Ativo;
-        const ativo =
-          ativoRaw == null ? true : ativoRaw === true || ativoRaw === "true" || ativoRaw === 1;
-        const quantidade = Number(m.quantidade ?? m.Quantidade ?? 1) || 1;
-        const valorUnitario = Number(m.valorUnitario ?? m.ValorUnitario ?? 0) || 0;
+        const ativo = isModuloAtivo(m);
+        const quantidade = toFiniteNumber(m.quantidade ?? m.Quantidade) ?? 1;
+        const valorUnitario =
+          toFiniteNumber(m.valorUnitario ?? m.valor_unitario ?? m.ValorUnitario) ?? 0;
         const valorTotal =
-          Number(m.valorTotal ?? m.ValorTotal ?? 0) || quantidade * valorUnitario;
+          toFiniteNumber(m.valorTotal ?? m.valor_total ?? m.ValorTotal ?? m.valor) ??
+          quantidade * valorUnitario;
         return {
           id: String(m.codigo ?? m.Codigo ?? m.id ?? `m${i}`),
           nome: String(m.nome ?? m.Nome ?? m.descricao ?? `Módulo ${m.codigo ?? i + 1}`),
-          descricao: `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`,
+          descricao: buildModuloDescricao(m, quantidade, valorUnitario),
           ativo,
           valor: valorTotal,
           quantidade,
           valorUnitario,
-          valor_unitario: valorUnitario,
           valorTotal,
-          valor_total: valorTotal,
+          status: ativo ? "Ativo" : "Inativo",
         };
       });
     const custo = modulos
       .filter((m) => m.ativo)
       .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
     return { modulos, custo: Math.round(custo * 100) / 100 };
-  }
-
-  // Regra de negócios real para GESTAO LEGAL enquanto o GET não retorna `modulos`:
-  // Licença PDV escala em quantidade (3 × R$ 33,33 = R$ 100,00) e Estoque é módulo
-  // único (1 × R$ 49,90). Total: R$ 149,90.
-  if ((produto ?? "").toUpperCase().includes("GESTAO LEGAL")) {
-    const modulos: Record<string, unknown>[] = [
-      {
-        id: "licenca-pdv",
-        nome: "Licença PDV",
-        descricao: "Qtde 3 × R$ 33,33 (unitário)",
-        ativo: true,
-        valor: 100.0,
-        quantidade: 3,
-        valorUnitario: 33.33,
-        valor_unitario: 33.33,
-        valorTotal: 100.0,
-        valor_total: 100.0,
-      },
-      {
-        id: "estoque",
-        nome: "Estoque",
-        descricao: "Qtde 1 × R$ 49,90 (unitário)",
-        ativo: true,
-        valor: 49.9,
-        quantidade: 1,
-        valorUnitario: 49.9,
-        valor_unitario: 49.9,
-        valorTotal: 49.9,
-        valor_total: 49.9,
-      },
-    ];
-    return { modulos, custo: 149.9 };
   }
 
   return {};
@@ -516,14 +555,13 @@ function calcularComandas(
   if (Array.isArray(modulos)) {
     const mesaAtiva = modulos.some(
       (m) =>
-        Boolean(m.ativo) &&
+        isModuloAtivo(m) &&
         /MESA|COMANDA|FICHA/i.test(String(m.nome ?? "")),
     );
     if (mesaAtiva) return 1;
-    // Padrão: 1 se houver qualquer módulo ativo (licença em operação), senão 0.
-    return modulos.some((m) => Boolean(m.ativo)) ? 1 : 0;
+    return 0;
   }
-  return 1;
+  return 0;
 }
 
 function mapLicenciamentoToRow(
@@ -579,17 +617,20 @@ function mapLicenciamentoToRow(
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
   // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
   const qtdPdvApi = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
-  const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
+  const pdvFallback = isProdutoGestaoLegal(produto) ? 3 : 1;
   const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
   row.qtd_pdv = qtdPdv;
   row.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
   const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
-  const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+  const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
     lic,
     produto,
-    qtdPdv,
   );
+  const modulosNorm = isProdutoGestaoLegal(produto)
+    ? buildGestaoLegalModulos()
+    : modulosExtraidos;
+  console.log("[OEM bulkSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
   if (modulosNorm) row.modulos_ativos = modulosNorm;
   // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
   const qtdComandasApi = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
@@ -598,7 +639,7 @@ function mapLicenciamentoToRow(
   const custoApi = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
   let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
   if (!custo || custo <= 0) {
-    custo = (produto ?? "").toUpperCase().includes("GESTAO LEGAL")
+    custo = isProdutoGestaoLegal(produto)
       ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
       : Math.round(qtdPdv * 29.9 * 100) / 100;
   }
