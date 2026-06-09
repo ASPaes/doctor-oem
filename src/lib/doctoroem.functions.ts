@@ -777,149 +777,195 @@ function mapLicenciamentoToRow(
   return row;
 }
 
+const OEM_API_ORIGIN = "https://api.pdvlegal.com.br";
+// Faixa real onde os clientes da base moram (sobrescritível por env vars).
+const OEM_COD_EMPRESA_INICIO = 31600;
+const OEM_COD_EMPRESA_FIM = 31650;
+// Deslocamento padrão filial − empresa observado na base (38259 − 31626).
+const OEM_OFFSET_FILIAL_PADRAO = 6633;
+// Variações testadas em torno da filial esperada ao varrer novas empresas.
+const OEM_DELTAS_FILIAL = [0, 1, -1, 2, -2];
+
+/** Autentica via OAuth2 (password grant) e retorna o access_token. */
+async function obterTokenOem(escopo: string): Promise<string> {
+  const clientId = process.env.OEM_CLIENT_ID;
+  const clientSecret = process.env.OEM_CLIENT_SECRET;
+  const username = process.env.OEM_API_USERNAME;
+  const password = process.env.OEM_API_PASSWORD;
+  if (!clientId || !clientSecret || !username || !password) {
+    throw new Error(
+      "OEM API: secrets OEM_CLIENT_ID, OEM_CLIENT_SECRET, OEM_API_USERNAME e OEM_API_PASSWORD são obrigatórios.",
+    );
+  }
+
+  const tokenBody = new URLSearchParams({
+    username,
+    password,
+    grant_type: "password",
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+
+  console.log(`[OEM ${escopo}] OAuth2: solicitando token em`, `${OEM_API_ORIGIN}/token`);
+  const tokenResp = await fetch(`${OEM_API_ORIGIN}/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: tokenBody.toString(),
+  });
+
+  if (!tokenResp.ok) {
+    const text = await tokenResp.text().catch(() => "");
+    console.error(`[OEM ${escopo}] falha na autenticação:`, {
+      status: tokenResp.status,
+      preview: text.slice(0, 200),
+    });
+    throw new Error(
+      `OEM API: falha na autenticação OAuth2 (HTTP ${tokenResp.status}). Verifique usuário/senha e credenciais do client.`,
+    );
+  }
+
+  const tokenJson = (await tokenResp.json().catch(() => ({}))) as Record<string, unknown>;
+  const accessToken = typeof tokenJson.access_token === "string" ? tokenJson.access_token : null;
+  if (!accessToken) {
+    throw new Error("OEM API: resposta de token sem o campo access_token.");
+  }
+  return accessToken;
+}
+
+/**
+ * GET /v1/licenciamento/{emp}/{fil}. Retorna o payload "desembrulhado" quando a
+ * licença existe, ou null em 404/erros de cliente (empresa/filial inexistente).
+ */
+async function fetchLicenciamentoOem(
+  accessToken: string,
+  codEmpresa: number,
+  codFilial: number,
+): Promise<Record<string, unknown> | null> {
+  const licUrl = `${OEM_API_ORIGIN}/v1/licenciamento/${codEmpresa}/${codFilial}`;
+  const licResp = await fetch(licUrl, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+
+  if (!licResp.ok) {
+    if (licResp.status >= 500) {
+      console.error("[OEM bulkSync] erro de servidor na consulta:", {
+        url: redactSensitiveUrl(licUrl),
+        status: licResp.status,
+      });
+    }
+    return null;
+  }
+
+  const raw = (await licResp.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!raw || typeof raw !== "object") return null;
+  return unwrapLicenciamentoPayload(raw);
+}
+
+function parseEnvInt(name: string, fallback: number): number {
+  const n = parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
   async (): Promise<{ inserted: number; updated: number; total: number; scanned: number }> => {
     const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
     const supabase = getDoctorOemAdmin();
 
-    // Cliente real conhecido do painel OEM da TabletCloud.
-    const COD_EMPRESA = 31626;
-    const COD_FILIAL = 38259;
+    const accessToken = await obterTokenOem("bulkSync");
 
-    // 1) Garante o registro inicial na tabela (upsert por empresa/filial).
-    const { data: existente, error: selErr } = await supabase
+    let inserted = 0;
+    let updated = 0;
+    let scanned = 0;
+
+    // 1) ATUALIZA todos os clientes já existentes no banco com o mesmo
+    //    mapeador validado no VERDAO BAR (extrairModulosECusto + métricas).
+    const { data: existentes, error: selErr } = await supabase
       .from("clientes_oem")
-      .select("id")
-      .eq("empresa_codigo", String(COD_EMPRESA))
-      .eq("filial_codigo", String(COD_FILIAL))
-      .maybeSingle();
+      .select("id, empresa_codigo, filial_codigo");
     if (selErr) throw new Error(`DoctorOEM bulkSync (load): ${selErr.message}`);
 
-    let registroId = existente?.id as string | undefined;
-    let inserted = 0;
+    const empresasConhecidas = new Set<number>();
+    const offsetsObservados: number[] = [];
 
-    if (!registroId) {
-      const { data: novo, error: insErr } = await supabase
+    for (const existente of existentes ?? []) {
+      const codEmpresa = parseInt(String(existente.empresa_codigo).replace(/\D/g, ""), 10);
+      const codFilial = parseInt(String(existente.filial_codigo).replace(/\D/g, ""), 10);
+      if (!Number.isFinite(codEmpresa) || !Number.isFinite(codFilial)) continue;
+
+      empresasConhecidas.add(codEmpresa);
+      offsetsObservados.push(codFilial - codEmpresa);
+
+      scanned += 1;
+      const lic = await fetchLicenciamentoOem(accessToken, codEmpresa, codFilial);
+      if (!lic) {
+        console.warn(`[OEM bulkSync] sem retorno para ${codEmpresa}/${codFilial}, mantendo registro.`);
+        continue;
+      }
+
+      const row = mapLicenciamentoToRow(lic, codEmpresa, codFilial);
+      if (!row) continue;
+
+      const { error: updErr } = await supabase
         .from("clientes_oem")
-        .insert({
-          nome_fantasia: `Cliente Real TabletCloud (${COD_EMPRESA})`,
-          cnpj_cpf: "00000000000000",
-          empresa_codigo: String(COD_EMPRESA),
-          filial_codigo: String(COD_FILIAL),
-          status: "Pendente Sincronização",
-          last_sync: new Date().toISOString(),
-        })
-        .select("id")
-        .single();
-      if (insErr) throw new Error(`DoctorOEM bulkSync (insert): ${insErr.message}`);
-      registroId = novo.id as string;
-      inserted = 1;
-      console.log("[OEM bulkSync] registro inicial criado:", registroId);
-    } else {
-      console.log("[OEM bulkSync] registro já existente, será atualizado:", registroId);
+        .update(row)
+        .eq("id", existente.id as string);
+      if (updErr) {
+        console.error(`[OEM bulkSync] falha ao atualizar ${codEmpresa}/${codFilial}:`, updErr.message);
+        continue;
+      }
+      updated += 1;
+      console.log(`[OEM bulkSync] atualizado ${codEmpresa}/${codFilial}.`);
     }
 
-    // 2) Credenciais obrigatórias do fluxo OAuth2.
-    const clientId = process.env.OEM_CLIENT_ID;
-    const clientSecret = process.env.OEM_CLIENT_SECRET;
-    const username = process.env.OEM_API_USERNAME;
-    const password = process.env.OEM_API_PASSWORD;
-    if (!clientId || !clientSecret || !username || !password) {
-      throw new Error(
-        "OEM API: secrets OEM_CLIENT_ID, OEM_CLIENT_SECRET, OEM_API_USERNAME e OEM_API_PASSWORD são obrigatórios.",
-      );
+    // 2) VARREDURA da faixa real para capturar NOVAS empresas ativas no OEM.
+    const inicio = parseEnvInt("OEM_COD_EMPRESA_INICIO", OEM_COD_EMPRESA_INICIO);
+    const fim = parseEnvInt("OEM_COD_EMPRESA_FIM", OEM_COD_EMPRESA_FIM);
+    // Filial esperada = empresa + offset observado na própria base (fallback padrão).
+    const offsetFilial = offsetsObservados.length
+      ? offsetsObservados.sort((a, b) => a - b)[Math.floor(offsetsObservados.length / 2)]
+      : OEM_OFFSET_FILIAL_PADRAO;
+
+    console.log(
+      `[OEM bulkSync] varrendo empresas ${inicio}..${fim} (offset de filial ${offsetFilial}).`,
+    );
+
+    for (let codEmpresa = inicio; codEmpresa <= fim; codEmpresa++) {
+      if (empresasConhecidas.has(codEmpresa)) continue;
+
+      for (const delta of OEM_DELTAS_FILIAL) {
+        const codFilial = codEmpresa + offsetFilial + delta;
+        if (codFilial <= 0) continue;
+
+        scanned += 1;
+        const lic = await fetchLicenciamentoOem(accessToken, codEmpresa, codFilial);
+        if (!lic) continue;
+
+        const row = mapLicenciamentoToRow(lic, codEmpresa, codFilial);
+        if (!row) continue;
+
+        const { error: insErr } = await supabase.from("clientes_oem").insert(row);
+        if (insErr) {
+          console.error(
+            `[OEM bulkSync] falha ao inserir novo cliente ${codEmpresa}/${codFilial}:`,
+            insErr.message,
+          );
+        } else {
+          inserted += 1;
+          console.log(`[OEM bulkSync] NOVO cliente capturado: ${codEmpresa}/${codFilial}.`);
+        }
+        break; // achou a filial desta empresa — passa para a próxima.
+      }
     }
 
-    const API_ORIGIN = "https://api.pdvlegal.com.br";
+    console.log(
+      `[OEM bulkSync] concluído: ${updated} atualizados, ${inserted} novos, ${scanned} consultas.`,
+    );
 
-    // 3) ETAPA 1 — POST /token (password grant), igual à sync individual.
-    const tokenBody = new URLSearchParams({
-      username,
-      password,
-      grant_type: "password",
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
-
-    console.log("[OEM bulkSync] OAuth2: solicitando token em", `${API_ORIGIN}/token`);
-    const tokenResp = await fetch(`${API_ORIGIN}/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: tokenBody.toString(),
-    });
-
-    if (!tokenResp.ok) {
-      const text = await tokenResp.text().catch(() => "");
-      console.error("[OEM bulkSync] falha na autenticação:", {
-        status: tokenResp.status,
-        preview: text.slice(0, 200),
-      });
-      throw new Error(
-        `OEM API: falha na autenticação OAuth2 (HTTP ${tokenResp.status}). Verifique usuário/senha e credenciais do client.`,
-      );
-    }
-
-    const tokenJson = (await tokenResp.json().catch(() => ({}))) as Record<string, unknown>;
-    const accessToken = typeof tokenJson.access_token === "string" ? tokenJson.access_token : null;
-    if (!accessToken) {
-      throw new Error("OEM API: resposta de token sem o campo access_token.");
-    }
-    console.log("[OEM bulkSync] OAuth2: access_token obtido com sucesso.");
-
-    // 4) ETAPA 2 — GET cirúrgico na rota de produção do cliente real.
-    const licUrl = `${API_ORIGIN}/v1/licenciamento/${COD_EMPRESA}/${COD_FILIAL}`;
-    console.log("[OEM bulkSync] GET licenciamento:", redactSensitiveUrl(licUrl));
-
-    const licResp = await fetch(licUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-      },
-    });
-
-    if (!licResp.ok) {
-      const text = await licResp.text().catch(() => "");
-      console.error("[OEM bulkSync] falha na consulta de licenciamento:", {
-        status: licResp.status,
-        preview: text.slice(0, 200),
-      });
-      throw new Error(
-        `OEM API: consulta de licenciamento falhou (HTTP ${licResp.status}) para ${COD_EMPRESA}/${COD_FILIAL}. O registro inicial ficou salvo como "Pendente Sincronização".`,
-      );
-    }
-
-    const raw = (await licResp.json().catch(() => ({}))) as Record<string, unknown>;
-    const lic = unwrapLicenciamentoPayload(raw);
-
-    console.log("JSON RETORNADO:", JSON.stringify(raw));
-
-    // 5) Mapeia o JSON real e atualiza por cima do registro.
-    const row =
-      mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL) ?? {
-        empresa_codigo: String(COD_EMPRESA),
-        filial_codigo: String(COD_FILIAL),
-        status: "Ativo",
-        last_sync: new Date().toISOString(),
-      };
-
-    const { error: updErr } = await supabase
-      .from("clientes_oem")
-      .update(row)
-      .eq("id", registroId);
-    if (updErr) throw new Error(`DoctorOEM bulkSync (update): ${updErr.message}`);
-
-    console.log("[OEM bulkSync] cliente real sincronizado com sucesso:", registroId);
-
-    return {
-      inserted,
-      updated: inserted === 0 ? 1 : 0,
-      total: 1,
-      scanned: 1,
-    };
+    return { inserted, updated, total: updated + inserted, scanned };
   },
 );
 
