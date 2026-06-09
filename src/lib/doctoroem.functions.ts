@@ -162,31 +162,69 @@ function buildModuloDescricao(
   return `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
 }
 
-function buildGestaoLegalModulos(): Record<string, unknown>[] {
+const GESTAO_LEGAL_CUSTO_PADRAO = 149.9;
+
+/**
+ * Conjunto padrão de módulos do ecossistema GESTAO LEGAL quando a API não
+ * envia o array `modulos`: Licença PDV (escala por PDV), Estoque e Mesa/Ficha
+ * (módulos ativo/inativo, quantidade 1). Sem valores fixos — a precificação
+ * é distribuída depois por distribuirCustoEntreModulos().
+ */
+function modulosPadraoGestaoLegal(qtdPdv: number): Record<string, unknown>[] {
+  const base = (id: string, nome: string, quantidade: number) => ({
+    id,
+    nome,
+    quantidade,
+    ativo: true,
+    status: "Ativo",
+    valor: 0,
+    valorUnitario: 0,
+    valor_unitario: 0,
+    valorTotal: 0,
+    valor_total: 0,
+    descricao: "",
+  });
   return [
-    {
-      id: "licenca-pdv",
-      nome: "Licença PDV",
-      descricao: "Qtde 3 × R$ 33,33 (unitário)",
-      ativo: true,
-      valor: 100.0,
-      quantidade: 3,
-      valorUnitario: 33.33,
-      valorTotal: 100.0,
-      status: "Ativo",
-    },
-    {
-      id: "estoque",
-      nome: "Estoque",
-      descricao: "Qtde 1 × R$ 49,90 (unitário)",
-      ativo: true,
-      valor: 49.9,
-      quantidade: 1,
-      valorUnitario: 49.9,
-      valorTotal: 49.9,
-      status: "Ativo",
-    },
+    base("licenca-pdv", "Licença PDV", qtdPdv > 0 ? qtdPdv : 1),
+    base("estoque", "Estoque", 1),
+    base("mesa-ficha", "Mesa/Ficha", 1),
   ];
+}
+
+/**
+ * Regra comercial: distribui o custo total contratado entre os módulos
+ * ATIVOS proporcionalmente à quantidade de unidades, fechando a soma exata
+ * (o último módulo absorve a diferença de arredondamento).
+ */
+function distribuirCustoEntreModulos(
+  modulos: Record<string, unknown>[],
+  custoTotal: number,
+): void {
+  const ativos = modulos.filter((m) => isModuloAtivo(m));
+  const totalUnidades = ativos.reduce(
+    (acc, m) => acc + (toFiniteNumber(m.quantidade) ?? 1),
+    0,
+  );
+  if (!ativos.length || totalUnidades <= 0 || custoTotal <= 0) return;
+
+  const unit = Math.round((custoTotal / totalUnidades) * 100) / 100;
+  let acumulado = 0;
+  ativos.forEach((m, idx) => {
+    const quantidade = toFiniteNumber(m.quantidade) ?? 1;
+    let valorTotal = Math.round(unit * quantidade * 100) / 100;
+    if (idx === ativos.length - 1) {
+      valorTotal = Math.round((custoTotal - acumulado) * 100) / 100;
+    }
+    acumulado = Math.round((acumulado + valorTotal) * 100) / 100;
+    const valorUnitario = Math.round((valorTotal / quantidade) * 100) / 100;
+    m.quantidade = quantidade;
+    m.valorUnitario = valorUnitario;
+    m.valor_unitario = valorUnitario;
+    m.valorTotal = valorTotal;
+    m.valor_total = valorTotal;
+    m.valor = valorTotal;
+    m.descricao = `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
+  });
 }
 
 function toModulos(v: unknown): Modulo[] {
