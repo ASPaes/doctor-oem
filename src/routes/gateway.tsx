@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { webhookLogsMock } from "@/lib/mock-data";
-import { listGateways, createGateway } from "@/lib/doctoroem.functions";
+import { listGateways, createGateway, listWebhookLogs } from "@/lib/doctoroem.functions";
 import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +17,11 @@ const gatewaysQueryOptions = queryOptions({
   queryFn: () => listGateways(),
 });
 
+const webhookLogsQueryOptions = queryOptions({
+  queryKey: ["doctoroem", "webhook_logs"],
+  queryFn: () => listWebhookLogs({ data: { limit: 50 } }),
+});
+
 export const Route = createFileRoute("/gateway")({
   head: () => ({
     meta: [
@@ -25,7 +29,10 @@ export const Route = createFileRoute("/gateway")({
       { name: "description", content: "Gerencie tokens X-API-Key, webhooks e monitore logs de envio." },
     ],
   }),
-  loader: ({ context }) => context.queryClient.ensureQueryData(gatewaysQueryOptions),
+  loader: ({ context }) => {
+    context.queryClient.ensureQueryData(gatewaysQueryOptions);
+    context.queryClient.ensureQueryData(webhookLogsQueryOptions);
+  },
   component: Gateway,
   pendingComponent: () => (
     <div className="p-10 text-center text-muted-foreground">Carregando gateways…</div>
@@ -40,6 +47,7 @@ const eventos = ["cliente.ativado", "cliente.bloqueado", "cliente.desativado", "
 function Gateway() {
   const { canAccessGateway } = useRole();
   const { data: gateways } = useSuspenseQuery(gatewaysQueryOptions);
+  const { data: logs } = useSuspenseQuery(webhookLogsQueryOptions);
   const queryClient = useQueryClient();
   const [novoUrl, setNovoUrl] = useState("");
   const [novoEventos, setNovoEventos] = useState<string[]>([]);
@@ -197,12 +205,18 @@ function Gateway() {
           <header className="flex items-center gap-2 border-b border-border px-5 py-4">
             <Activity className="h-4 w-4 text-accent" />
             <h2 className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-              Logs de envio (amostra · ainda não há tabela)
+              Logs de envio
             </h2>
           </header>
           <ul className="divide-y divide-border">
-            {webhookLogsMock.map((l) => {
-              const ok = l.status >= 200 && l.status < 300;
+            {logs.length === 0 && (
+              <li className="px-5 py-6 text-sm text-muted-foreground">
+                Nenhum envio registrado ainda.
+              </li>
+            )}
+            {logs.map((l) => {
+              const status = l.status ?? 0;
+              const ok = status >= 200 && status < 300;
               return (
                 <li key={l.id} className="flex items-center gap-3 px-5 py-3 text-sm">
                   {ok ? (
@@ -216,7 +230,7 @@ function Gateway() {
                       <span className="text-muted-foreground"> · {l.webhook}</span>
                     </p>
                     <p className="text-[11px] text-muted-foreground">
-                      {new Date(l.timestamp).toLocaleString("pt-BR")} · {l.duracaoMs}ms
+                      {new Date(l.timestamp).toLocaleString("pt-BR")}
                     </p>
                   </div>
                   <span
@@ -224,7 +238,7 @@ function Gateway() {
                       ok ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
                     }`}
                   >
-                    HTTP {l.status}
+                    {l.status ? `HTTP ${l.status}` : "—"}
                   </span>
                 </li>
               );
