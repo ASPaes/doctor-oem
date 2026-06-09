@@ -510,10 +510,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     }
 
     const raw = (await licResp.json().catch(() => ({}))) as Record<string, unknown>;
-    // Algumas APIs envelopam o objeto em "data".
-    const lic = (raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
-      ? (raw.data as Record<string, unknown>)
-      : raw) as Record<string, unknown>;
+    const lic = unwrapLicenciamentoPayload(raw);
 
     console.log("[OEM forceSync] payload real recebido:", JSON.stringify(lic).slice(0, 400));
 
@@ -810,10 +807,7 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
     }
 
     const raw = (await licResp.json().catch(() => ({}))) as Record<string, unknown>;
-    const lic =
-      raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
-        ? (raw.data as Record<string, unknown>)
-        : raw;
+    const lic = unwrapLicenciamentoPayload(raw);
 
     console.log("JSON RETORNADO:", JSON.stringify(raw));
 
