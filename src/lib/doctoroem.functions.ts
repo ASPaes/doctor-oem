@@ -162,31 +162,69 @@ function buildModuloDescricao(
   return `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
 }
 
-function buildGestaoLegalModulos(): Record<string, unknown>[] {
+const GESTAO_LEGAL_CUSTO_PADRAO = 149.9;
+
+/**
+ * Conjunto padrão de módulos do ecossistema GESTAO LEGAL quando a API não
+ * envia o array `modulos`: Licença PDV (escala por PDV), Estoque e Mesa/Ficha
+ * (módulos ativo/inativo, quantidade 1). Sem valores fixos — a precificação
+ * é distribuída depois por distribuirCustoEntreModulos().
+ */
+function modulosPadraoGestaoLegal(qtdPdv: number): Record<string, unknown>[] {
+  const base = (id: string, nome: string, quantidade: number) => ({
+    id,
+    nome,
+    quantidade,
+    ativo: true,
+    status: "Ativo",
+    valor: 0,
+    valorUnitario: 0,
+    valor_unitario: 0,
+    valorTotal: 0,
+    valor_total: 0,
+    descricao: "",
+  });
   return [
-    {
-      id: "licenca-pdv",
-      nome: "Licença PDV",
-      descricao: "Qtde 3 × R$ 33,33 (unitário)",
-      ativo: true,
-      valor: 100.0,
-      quantidade: 3,
-      valorUnitario: 33.33,
-      valorTotal: 100.0,
-      status: "Ativo",
-    },
-    {
-      id: "estoque",
-      nome: "Estoque",
-      descricao: "Qtde 1 × R$ 49,90 (unitário)",
-      ativo: true,
-      valor: 49.9,
-      quantidade: 1,
-      valorUnitario: 49.9,
-      valorTotal: 49.9,
-      status: "Ativo",
-    },
+    base("licenca-pdv", "Licença PDV", qtdPdv > 0 ? qtdPdv : 1),
+    base("estoque", "Estoque", 1),
+    base("mesa-ficha", "Mesa/Ficha", 1),
   ];
+}
+
+/**
+ * Regra comercial: distribui o custo total contratado entre os módulos
+ * ATIVOS proporcionalmente à quantidade de unidades, fechando a soma exata
+ * (o último módulo absorve a diferença de arredondamento).
+ */
+function distribuirCustoEntreModulos(
+  modulos: Record<string, unknown>[],
+  custoTotal: number,
+): void {
+  const ativos = modulos.filter((m) => isModuloAtivo(m));
+  const totalUnidades = ativos.reduce(
+    (acc, m) => acc + (toFiniteNumber(m.quantidade) ?? 1),
+    0,
+  );
+  if (!ativos.length || totalUnidades <= 0 || custoTotal <= 0) return;
+
+  const unit = Math.round((custoTotal / totalUnidades) * 100) / 100;
+  let acumulado = 0;
+  ativos.forEach((m, idx) => {
+    const quantidade = toFiniteNumber(m.quantidade) ?? 1;
+    let valorTotal = Math.round(unit * quantidade * 100) / 100;
+    if (idx === ativos.length - 1) {
+      valorTotal = Math.round((custoTotal - acumulado) * 100) / 100;
+    }
+    acumulado = Math.round((acumulado + valorTotal) * 100) / 100;
+    const valorUnitario = Math.round((valorTotal / quantidade) * 100) / 100;
+    m.quantidade = quantidade;
+    m.valorUnitario = valorUnitario;
+    m.valor_unitario = valorUnitario;
+    m.valorTotal = valorTotal;
+    m.valor_total = valorTotal;
+    m.valor = valorTotal;
+    m.descricao = `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
+  });
 }
 
 function toModulos(v: unknown): Modulo[] {
@@ -458,10 +496,9 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
       lic,
       produto,
+      qtdPdv,
     );
-    const modulosNorm = isProdutoGestaoLegal(produto)
-      ? buildGestaoLegalModulos()
-      : modulosExtraidos;
+    const modulosNorm = modulosExtraidos;
     console.log("[OEM forceSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
     if (modulosNorm) update.modulos_ativos = modulosNorm;
     // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
@@ -504,15 +541,15 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 function extrairModulosECusto(
   lic: Record<string, unknown>,
   produto: string | undefined,
+  qtdPdv: number,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
   const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
 
-  if (isProdutoGestaoLegal(produto)) {
-    return { modulos: buildGestaoLegalModulos(), custo: 149.9 };
-  }
+  let modulos: Record<string, unknown>[] | undefined;
 
   if (Array.isArray(rawModulos) && rawModulos.length > 0) {
-    const modulos = rawModulos
+    // Lê dinamicamente os módulos REAIS da API (Mesa/Ficha incluso, se ativo).
+    modulos = rawModulos
       .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
       .map((m, i) => {
         const ativo = isModuloAtivo(m);
@@ -530,17 +567,35 @@ function extrairModulosECusto(
           valor: valorTotal,
           quantidade,
           valorUnitario,
+          valor_unitario: valorUnitario,
           valorTotal,
+          valor_total: valorTotal,
           status: ativo ? "Ativo" : "Inativo",
         };
       });
-    const custo = modulos
-      .filter((m) => m.ativo)
-      .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
-    return { modulos, custo: Math.round(custo * 100) / 100 };
+  } else if (isProdutoGestaoLegal(produto)) {
+    // API sem array de módulos: monta o ecossistema padrão do GESTAO LEGAL
+    // (Licença PDV escala, Estoque e Mesa/Ficha são ativo/inativo).
+    modulos = modulosPadraoGestaoLegal(qtdPdv);
+  } else {
+    return {};
   }
 
-  return {};
+  let custo = modulos
+    .filter((m) => isModuloAtivo(m))
+    .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
+
+  // O JSON da TabletCloud vem sem valores em dinheiro: aplica a regra
+  // comercial e distribui o custo contratado entre os módulos ativos
+  // para a soma fechar exatamente o Custo Mensal Total.
+  if ((!custo || custo <= 0) && isProdutoGestaoLegal(produto)) {
+    const custoApi = toFiniteNumber(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
+    const total = custoApi && custoApi > 0 ? custoApi : GESTAO_LEGAL_CUSTO_PADRAO;
+    distribuirCustoEntreModulos(modulos, total);
+    custo = total;
+  }
+
+  return { modulos, custo: Math.round(custo * 100) / 100 };
 }
 
 /**
@@ -626,10 +681,9 @@ function mapLicenciamentoToRow(
   const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
     lic,
     produto,
+    qtdPdv,
   );
-  const modulosNorm = isProdutoGestaoLegal(produto)
-    ? buildGestaoLegalModulos()
-    : modulosExtraidos;
+  const modulosNorm = modulosExtraidos;
   console.log("[OEM bulkSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
   if (modulosNorm) row.modulos_ativos = modulosNorm;
   // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
