@@ -231,55 +231,112 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const rawBase = process.env.OEM_API_BASE_URL;
     const clientId = process.env.OEM_CLIENT_ID;
     const clientSecret = process.env.OEM_CLIENT_SECRET;
+    const username = process.env.OEM_API_USERNAME;
+    const password = process.env.OEM_API_PASSWORD;
     if (!rawBase || !clientId || !clientSecret) {
       throw new Error(
         "OEM API: variáveis OEM_API_BASE_URL, OEM_CLIENT_ID e/ou OEM_CLIENT_SECRET ausentes nos secrets.",
       );
     }
+    if (!username || !password) {
+      throw new Error(
+        "OEM API: faltam OEM_API_USERNAME e OEM_API_PASSWORD. A TabletCloud documenta autenticação via /token antes das rotas de licenciamento.",
+      );
+    }
 
-    // Normaliza a URL: remove espaços, barras finais e qualquer placeholder de cnpj
-    // que possa ter sido colado no secret por engano (ex.: ".../oem_licenciamentos/{cnpj}").
-    const apiUrl = rawBase
-      .trim()
-      .replace(/\{[^}]*\}\/?$/g, "")
-      .replace(/\/+$/g, "");
+    const currentRow = current as ClienteRow;
+    const cnpj = currentRow.cnpj_cpf;
+    const apiOrigin = getTabletCloudOrigin(rawBase);
+    const tokenUrl = `${apiOrigin}/token`;
+    const licenciamentoUrl = `${apiOrigin}/licenciamento/minhaslicencas/1/${encodeURIComponent(cnpj)}`;
 
-    const method = "POST" as const;
-    const cnpj = (current as ClienteRow).cnpj_cpf;
-    const requestBody = JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
+    console.log("[OEM forceSync] token:", {
+      url: tokenUrl,
+      method: "POST",
+      authMode: "tabletcloud-token",
+      bodyKeys: ["username", "password", "grant_type", "client_id", "client_secret"],
+    });
+
+    const tokenResp = await fetch(tokenUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: new URLSearchParams({
+        username,
+        password,
+        grant_type: "password",
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+    });
+
+    if (!tokenResp.ok) {
+      const text = await tokenResp.text().catch(() => "");
+      console.error("[OEM forceSync] falha token:", {
+        url: tokenUrl,
+        method: "POST",
+        status: tokenResp.status,
+        statusText: tokenResp.statusText,
+        responsePreview: text.slice(0, 500),
+      });
+      throw new Error(
+        `OEM API ${tokenResp.status} em POST ${tokenUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
+      );
+    }
+
+    const tokenPayload = (await tokenResp.json().catch(() => ({}))) as {
+      access_token?: string;
+      token_type?: string;
+      error?: string;
+      error_description?: string;
+    };
+    const accessToken = tokenPayload.access_token;
+
+    if (!accessToken) {
+      throw new Error(
+        `OEM API token inválido — ${tokenPayload.error_description ?? tokenPayload.error ?? "access_token ausente"}`,
+      );
+    }
+
+    console.log("[OEM forceSync] licenciamento:", {
+      url: redactSensitiveUrl(`${licenciamentoUrl}?token=${accessToken}`),
+      method: "GET",
       cnpj_cpf: cnpj,
     });
 
-    console.log("[OEM forceSync] disparo:", {
-      url: apiUrl,
-      method,
-      cnpj_cpf: cnpj,
-      bodyKeys: ["client_id", "client_secret", "cnpj_cpf"],
-    });
-
-    const resp = await fetch(apiUrl, {
-      method,
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: requestBody,
+    const resp = await fetch(licenciamentoUrl, {
+      method: "GET",
+      headers: { Accept: "application/json" },
     });
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      console.error("[OEM forceSync] falha:", {
-        url: apiUrl,
-        method,
+      console.error("[OEM forceSync] falha licenciamento:", {
+        url: redactSensitiveUrl(licenciamentoUrl),
+        method: "GET",
         status: resp.status,
         statusText: resp.statusText,
         responsePreview: text.slice(0, 500),
       });
       throw new Error(
-        `OEM API ${resp.status} em ${method} ${apiUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
+        `OEM API ${resp.status} em GET ${licenciamentoUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
       );
     }
 
-    const payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+    const licenciamentoPayload =
+      (await resp.json().catch(() => ({}))) as TabletCloudLicenciamentoResponse;
+    const licencas = Array.isArray(licenciamentoPayload.data) ? licenciamentoPayload.data : [];
+    const match = findTabletCloudLicenca(licencas, cnpj);
+
+    if (!match) {
+      throw new Error(
+        `OEM API não retornou licenciamento para o CNPJ/CPF ${cnpj} em GET ${licenciamentoUrl}.`,
+      );
+    }
+
+    const payload = mapTabletCloudLicencaToUpdate(currentRow, match.item, match.filial);
 
     // 3) Faz upsert/update apenas das colunas permitidas que vieram no payload.
     const allowed = [
