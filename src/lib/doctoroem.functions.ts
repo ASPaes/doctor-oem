@@ -262,10 +262,16 @@ function unwrapLicenciamentoPayload(raw: Record<string, unknown>): Record<string
 
 function mapModuloApiToStorage(modulo: Record<string, unknown>, index: number): Record<string, unknown> {
   const quantidade = getModuloQuantidade(modulo);
-  const valorUnitario = getModuloValorUnitario(modulo);
   const valorTotal = getModuloValorTotal(modulo);
+  let valorUnitario = getModuloValorUnitario(modulo);
+  // Deriva o unitário quando a API só manda o total (ex.: Estoque: qtd 1, valor 3.00).
+  if (valorUnitario === 0 && quantidade > 0 && valorTotal > 0) {
+    valorUnitario = Math.round((valorTotal / quantidade) * 100) / 100;
+  }
   const ativo = isModuloAtivo(modulo);
-  const nome = getModuloNome(modulo, `Módulo ${index + 1}`);
+  let nome = getModuloNome(modulo, `Módulo ${index + 1}`);
+  // Regra de negócio: módulo de PDV/Comandas aparece como "Licença PDV" na matriz.
+  if (/PDV|COMANDA/i.test(nome)) nome = "Licença PDV";
 
   return {
     ...modulo,
@@ -530,8 +536,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
       ? (lic.filial as Record<string, unknown>)
       : undefined;
 
-  const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado);
-  const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
+  const bloqueado = bool(lic.bloquearLicenca ?? filialObjSync?.bloqueado ?? lic.bloqueado);
+  const pdvComandas = num(filialObjSync?.pdvComandas ?? lic.pdvComandas ?? lic.qtdPdvComandas);
 
     const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
 
@@ -554,7 +560,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (produto) update.produto_principal = produto;
     const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
     if (filiais !== undefined) update.numero_filiais = filiais;
-    const usuarios = num(lic.usuarios ?? lic.usuariosAdicionais);
+    const usuarios = num(filialObjSync?.usuarios ?? lic.usuarios ?? lic.usuariosAdicionais);
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
     const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(lic);
     const modulosNorm = modulosExtraidos;
@@ -571,7 +577,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (modulosNorm) update.modulos_ativos = modulosNorm;
     const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
     update.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
-    update.custo_total = custoModulos ?? num(lic.custoTotal ?? lic.valorTotal) ?? 0;
+    update.custo_total =
+      custoModulos ?? num(filialObjSync?.valorTotal ?? lic.custoTotal ?? lic.valorTotal) ?? 0;
     if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
       update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
     }
@@ -596,14 +603,87 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
  * Normaliza o array real de módulos da API, preservando os campos originais e
  * adicionando aliases usados pela interface.
  */
+const VALOR_UNITARIO_PDV_PADRAO = 10.0;
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function makeModuloSintetico(
+  id: string,
+  nome: string,
+  quantidade: number,
+  valorUnitario: number,
+  total: number,
+): Record<string, unknown> {
+  return {
+    id,
+    nome,
+    descricao: `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`,
+    ativo: true,
+    status: "Ativo",
+    quantidade,
+    valorUnitario,
+    valor_unitario: valorUnitario,
+    total,
+    valorTotal: total,
+    valor_total: total,
+    valor: total,
+  };
+}
+
+function getFilialObj(lic: Record<string, unknown>): Record<string, unknown> | undefined {
+  return lic.filial && typeof lic.filial === "object" && !Array.isArray(lic.filial)
+    ? (lic.filial as Record<string, unknown>)
+    : undefined;
+}
+
 function extrairModulosECusto(
   lic: Record<string, unknown>,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
-  const rawModulos = getRawModulosFromLicenciamento(lic);
-  if (!rawModulos?.length) return {};
+  const filialObj = getFilialObj(lic);
+  const valorTotalFilial = toFiniteNumber(filialObj?.valorTotal ?? lic.valorTotal);
+  const pdvComandas =
+    toFiniteNumber(filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.qtdPdvComandas) ?? 0;
 
-  const modulos = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
-  return { modulos, custo: sumModuloTotals(modulos) };
+  const rawModulos = getRawModulosFromLicenciamento(lic) ?? [];
+  const modulosApi = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
+
+  const nomeUpper = (m: Record<string, unknown>) => getModuloNome(m, "").toUpperCase();
+  const temPdv = modulosApi.some((m) => /PDV|COMANDA/.test(nomeUpper(m)));
+  const temGestao = modulosApi.some((m) => /GEST/.test(nomeUpper(m)));
+
+  const extras: Record<string, unknown>[] = [];
+
+  // "Licença PDV": a API não traz na lista de módulos — vem como filial.pdvComandas.
+  if (!temPdv && pdvComandas > 0) {
+    const unitPdv =
+      toFiniteNumber(lic.valorPdv ?? filialObj?.valorPdv ?? lic.valorUnitarioPdv) ??
+      VALOR_UNITARIO_PDV_PADRAO;
+    extras.push(
+      makeModuloSintetico("licenca-pdv", "Licença PDV", pdvComandas, unitPdv, round2(pdvComandas * unitPdv)),
+    );
+  }
+
+  // "Gestao" (licença base do produto): o restante do valorTotal da filial
+  // após descontar PDVs e demais módulos (ex.: 62.90 − 30.00 − 3.00 = 29.90).
+  if (!temGestao && valorTotalFilial !== undefined) {
+    const somaParcial = round2(sumModuloTotals(modulosApi) + sumModuloTotals(extras));
+    const restante = round2(valorTotalFilial - somaParcial);
+    if (restante > 0) {
+      const nomeProduto =
+        typeof lic.nomeProduto === "string" && lic.nomeProduto.trim() !== ""
+          ? lic.nomeProduto
+          : "Gestao";
+      extras.unshift(makeModuloSintetico("gestao", nomeProduto, 1, restante, restante));
+    }
+  }
+
+  const modulos = [...extras, ...modulosApi];
+  if (!modulos.length) return {};
+
+  const custo = valorTotalFilial ?? sumModuloTotals(modulos);
+  return { modulos, custo: round2(custo) };
 }
 
 /**
@@ -647,8 +727,11 @@ function mapLicenciamentoToRow(
   // Sem CNPJ nem nome não há como identificar o cliente — descarta.
   if (!cpfCnpj && !nomeLoja) return null;
 
-  const bloqueado = bool(lic.bloquearLicenca ?? lic.BloquearLicenca ?? lic.bloqueado ?? lic.Bloqueado) ?? false;
-  const pdvComandas = num(lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas);
+  const bloqueado =
+    bool(lic.bloquearLicenca ?? lic.BloquearLicenca ?? filialObj?.bloqueado ?? lic.bloqueado ?? lic.Bloqueado) ?? false;
+  const pdvComandas = num(
+    filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas,
+  );
 
   const row: Record<string, unknown> = {
     empresa_codigo: String(num(lic.codEmpresa ?? lic.codeEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
@@ -668,7 +751,7 @@ function mapLicenciamentoToRow(
   if (produto) row.produto_principal = produto;
   const filiais = num(lic.numeroFiliais ?? lic.NumeroFiliais ?? lic.qtdFiliais ?? lic.QtdFiliais);
   if (filiais !== undefined) row.numero_filiais = filiais;
-  const usuarios = num(lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
+  const usuarios = num(filialObj?.usuarios ?? lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
   const qtdPdvApi = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
   const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(lic);
@@ -683,7 +766,10 @@ function mapLicenciamentoToRow(
   if (modulosNorm) row.modulos_ativos = modulosNorm;
   const qtdComandasApi = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
   row.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
-  row.custo_total = custoModulos ?? num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ?? 0;
+  row.custo_total =
+    custoModulos ??
+    num(filialObj?.valorTotal ?? lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ??
+    0;
   if (Array.isArray(lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe)) {
     row.licencas_detalhe = lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe;
   }
