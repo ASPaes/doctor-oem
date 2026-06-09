@@ -20,6 +20,9 @@ type ClienteRow = {
   bloqueado: boolean | null;
   usuarios_adicionais: number | null;
   qtd_pdv_comandas: number | null;
+  qtd_pdv: number | null;
+  qtd_comandas: number | null;
+  motivo_bloqueio: string | null;
   custo_total: number | string | null;
   modulos_ativos: unknown;
   licencas_detalhe: unknown;
@@ -64,12 +67,12 @@ function mapCliente(row: ClienteRow): Cliente {
     filiaisAtivas: row.numero_filiais ?? 0,
     dataCadastro: ativacao.slice(0, 10),
     dataAtivacao: ativacao,
-    qtdPdv: row.qtd_pdv_comandas ?? 0,
-    qtdComandas: 0,
+    qtdPdv: row.qtd_pdv ?? row.qtd_pdv_comandas ?? 0,
+    qtdComandas: row.qtd_comandas ?? 0,
     usuariosAdicionais: row.usuarios_adicionais ?? 0,
     ativo: (row.status ?? "Ativo").toLowerCase() === "ativo",
     bloqueado: Boolean(row.bloqueado),
-    motivoBloqueio: undefined,
+    motivoBloqueio: row.motivo_bloqueio ?? undefined,
     custoMensal: Number(row.custo_total ?? 0),
     modulos: toModulos(row.modulos_ativos),
     licencas: toLicencas(row.licencas_detalhe),
@@ -133,7 +136,7 @@ export const listUsuarios = createServerFn({ method: "GET" }).handler(
 
     const [{ data: profiles, error: pErr }, { data: usersResp, error: uErr }] =
       await Promise.all([
-        supabase.from("profiles").select("id, full_name, role, updated_at"),
+        supabase.from("profiles").select("id, full_name, role, updated_at, is_active"),
         supabase.auth.admin.listUsers({ page: 1, perPage: 200 }),
       ]);
     if (pErr) throw new Error(`DoctorOEM listProfiles: ${pErr.message}`);
@@ -158,7 +161,7 @@ export const listUsuarios = createServerFn({ method: "GET" }).handler(
         nome: (p.full_name as string | null) ?? "Sem nome",
         email: auth?.email ?? "—",
         role,
-        ativo: true,
+        ativo: (p.is_active as boolean | null) ?? true,
         ultimoAcesso:
           auth?.lastSignIn ?? (p.updated_at as string | null) ?? new Date().toISOString(),
       };
@@ -240,3 +243,56 @@ async function sha256Hex(s: string): Promise<string> {
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
+
+// ============================================================
+// Webhook logs
+// ============================================================
+
+export type WebhookLogEntry = {
+  id: string;
+  gatewayId: string | null;
+  webhook: string;
+  evento: string;
+  status: number | null;
+  timestamp: string;
+};
+
+export const listWebhookLogs = createServerFn({ method: "GET" })
+  .inputValidator((input) =>
+    z
+      .object({ gatewayId: z.string().uuid().optional(), limit: z.number().min(1).max(200).optional() })
+      .optional()
+      .parse(input),
+  )
+  .handler(async ({ data }): Promise<WebhookLogEntry[]> => {
+    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
+    const supabase = getDoctorOemAdmin();
+    let query = supabase
+      .from("webhook_logs")
+      .select(
+        "id, gateway_id, event_type, response_status, created_at, developer_gateways(webhook_url)",
+      )
+      .order("created_at", { ascending: false })
+      .limit(data?.limit ?? 50);
+    if (data?.gatewayId) query = query.eq("gateway_id", data.gatewayId);
+    const { data: rows, error } = await query;
+    if (error) throw new Error(`DoctorOEM listWebhookLogs: ${error.message}`);
+    return (rows ?? []).map((r) => {
+      const gw = r.developer_gateways as { webhook_url: string | null } | null;
+      const url = gw?.webhook_url ?? "";
+      let host = url;
+      try {
+        if (url) host = new URL(url).host;
+      } catch {
+        /* mantém url cru */
+      }
+      return {
+        id: r.id as string,
+        gatewayId: (r.gateway_id as string | null) ?? null,
+        webhook: host || "—",
+        evento: (r.event_type as string) ?? "—",
+        status: (r.response_status as number | null) ?? null,
+        timestamp: (r.created_at as string) ?? new Date().toISOString(),
+      };
+    });
+  });
