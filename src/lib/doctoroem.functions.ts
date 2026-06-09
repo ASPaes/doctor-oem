@@ -536,8 +536,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
       ? (lic.filial as Record<string, unknown>)
       : undefined;
 
-  const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado);
-  const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
+  const bloqueado = bool(lic.bloquearLicenca ?? filialObjSync?.bloqueado ?? lic.bloqueado);
+  const pdvComandas = num(filialObjSync?.pdvComandas ?? lic.pdvComandas ?? lic.qtdPdvComandas);
 
     const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
 
@@ -560,7 +560,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (produto) update.produto_principal = produto;
     const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
     if (filiais !== undefined) update.numero_filiais = filiais;
-    const usuarios = num(lic.usuarios ?? lic.usuariosAdicionais);
+    const usuarios = num(filialObjSync?.usuarios ?? lic.usuarios ?? lic.usuariosAdicionais);
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
     const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(lic);
     const modulosNorm = modulosExtraidos;
@@ -577,7 +577,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (modulosNorm) update.modulos_ativos = modulosNorm;
     const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
     update.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
-    update.custo_total = custoModulos ?? num(lic.custoTotal ?? lic.valorTotal) ?? 0;
+    update.custo_total =
+      custoModulos ?? num(filialObjSync?.valorTotal ?? lic.custoTotal ?? lic.valorTotal) ?? 0;
     if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
       update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
     }
