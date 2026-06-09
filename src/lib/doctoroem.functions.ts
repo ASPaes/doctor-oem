@@ -380,7 +380,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
     // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
     const qtdPdvApi = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
-    const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : 1;
+    const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
+    const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
     update.qtd_pdv = qtdPdv;
     const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas) ?? pdvComandas;
     update.qtd_comandas = qtdComandasApi && qtdComandasApi > 0 ? qtdComandasApi : qtdPdv;
