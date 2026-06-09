@@ -1,9 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { usuariosMock, type Role } from "@/lib/mock-data";
+import { type Role } from "@/lib/mock-data";
+import { listUsuarios } from "@/lib/doctoroem.functions";
+import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Plus, UserCog, Shield, Wallet, Headset } from "lucide-react";
 import { useRole, roleLabels } from "@/lib/role-context";
+
+const usuariosQueryOptions = queryOptions({
+  queryKey: ["doctoroem", "usuarios"],
+  queryFn: () => listUsuarios(),
+});
 
 export const Route = createFileRoute("/usuarios")({
   head: () => ({
@@ -12,7 +19,14 @@ export const Route = createFileRoute("/usuarios")({
       { name: "description", content: "Gerencie perfis de acesso RBAC: Admin, Financeiro e Suporte." },
     ],
   }),
+  loader: ({ context }) => context.queryClient.ensureQueryData(usuariosQueryOptions),
   component: Usuarios,
+  pendingComponent: () => (
+    <div className="p-10 text-center text-muted-foreground">Carregando usuários…</div>
+  ),
+  errorComponent: ({ error }) => (
+    <div className="p-10 text-center text-destructive">{error.message}</div>
+  ),
 });
 
 const roleIcon: Record<Role, typeof Shield> = {
@@ -29,6 +43,7 @@ const roleDescricao: Record<Role, string> = {
 
 function Usuarios() {
   const { canManageUsers } = useRole();
+  const { data: usuarios } = useSuspenseQuery(usuariosQueryOptions);
 
   if (!canManageUsers) {
     return (
@@ -62,7 +77,7 @@ function Usuarios() {
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {(Object.keys(roleLabels) as Role[]).map((r) => {
           const Icon = roleIcon[r];
-          const count = usuariosMock.filter((u) => u.role === r).length;
+          const count = usuarios.filter((u) => u.role === r).length;
           return (
             <div key={r} className="glass-panel rounded-2xl p-5">
               <div className="flex items-center gap-3">
@@ -96,7 +111,7 @@ function Usuarios() {
               </tr>
             </thead>
             <tbody>
-              {usuariosMock.map((u) => (
+              {usuarios.map((u) => (
                 <tr key={u.id} className="border-b border-border/60 last:border-0 hover:bg-secondary/30 transition">
                   <td className="px-5 py-3">
                     <p className="font-medium">{u.nome}</p>
