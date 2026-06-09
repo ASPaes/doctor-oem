@@ -11,6 +11,12 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { AppSidebar } from "@/components/app-sidebar";
+import { RoleProvider } from "@/lib/role-context";
+import { RoleSwitcher } from "@/components/role-switcher";
+import { Toaster } from "@/components/ui/sonner";
+import { Search, Bell } from "lucide-react";
 
 function NotFoundComponent() {
   return (
@@ -77,11 +83,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Nexus Hub — Gestão de Clientes e Licenças OEM" },
+      { name: "description", content: "Hub central de gestão de clientes, licenças e integrações OEM com painel financeiro e gateway de APIs." },
+      { name: "author", content: "Nexus Hub" },
+      { property: "og:title", content: "Nexus Hub — Gestão de Clientes e Licenças OEM" },
+      { property: "og:description", content: "Painel premium para gestão de clientes, licenças OEM, módulos contratados e integrações via API." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
@@ -118,8 +124,35 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <RoleProvider>
+        <SidebarProvider>
+          <div className="min-h-screen flex w-full">
+            <AppSidebar />
+            <div className="flex-1 flex flex-col min-w-0">
+              <header className="h-14 flex items-center gap-3 border-b border-border glass-panel px-4 sticky top-0 z-30">
+                <SidebarTrigger />
+                <div className="hidden md:flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="h-1.5 w-1.5 rounded-full bg-success status-dot text-success" />
+                  API OEM online · latência 84ms
+                </div>
+                <div className="ml-auto flex items-center gap-2">
+                  <button className="hidden sm:grid h-9 w-9 place-items-center rounded-full border border-border text-muted-foreground hover:text-foreground transition">
+                    <Search className="h-4 w-4" />
+                  </button>
+                  <button className="hidden sm:grid h-9 w-9 place-items-center rounded-full border border-border text-muted-foreground hover:text-foreground transition">
+                    <Bell className="h-4 w-4" />
+                  </button>
+                  <RoleSwitcher />
+                </div>
+              </header>
+              <main className="flex-1">
+                <Outlet />
+              </main>
+            </div>
+          </div>
+          <Toaster />
+        </SidebarProvider>
+      </RoleProvider>
     </QueryClientProvider>
   );
 }
