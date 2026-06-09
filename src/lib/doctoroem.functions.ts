@@ -592,13 +592,13 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
         ? (raw.data as Record<string, unknown>)
         : raw;
 
-    console.log("[OEM bulkSync] payload real recebido:", JSON.stringify(lic).slice(0, 400));
+    console.log("JSON RETORNADO:", JSON.stringify(raw));
 
     // 5) Mapeia o JSON real e atualiza por cima do registro.
     const row = mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL);
     if (!row) {
       throw new Error(
-        "OEM API: a resposta real não trouxe campos identificáveis (cpfCnpj/nomeLoja). O registro ficou como Pendente Sincronização.",
+        `OEM API: campos não identificados. JSON recebido: ${JSON.stringify(raw).substring(0, 150)}`,
       );
     }
 
