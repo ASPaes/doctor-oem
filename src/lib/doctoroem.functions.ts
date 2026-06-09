@@ -378,11 +378,13 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (filiais !== undefined) update.numero_filiais = filiais;
     const usuarios = num(lic.usuarios ?? lic.usuariosAdicionais);
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
-    const qtdPdv = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
-    if (qtdPdv !== undefined) update.qtd_pdv = qtdPdv;
-    const qtdComandas = num(lic.qtdComandas ?? lic.comandas) ?? pdvComandas;
-    if (qtdComandas !== undefined) update.qtd_comandas = qtdComandas;
-    if (pdvComandas !== undefined) update.qtd_pdv_comandas = pdvComandas;
+    // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
+    const qtdPdvApi = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
+    const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : 1;
+    update.qtd_pdv = qtdPdv;
+    const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas) ?? pdvComandas;
+    update.qtd_comandas = qtdComandasApi && qtdComandasApi > 0 ? qtdComandasApi : qtdPdv;
+    update.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
     update.bloqueado = bloqueado ?? false;
     update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
@@ -393,8 +395,15 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
       qtdPdv,
     );
     if (modulosNorm) update.modulos_ativos = modulosNorm;
-    const custo = num(lic.custoTotal ?? lic.valorTotal) ?? custoModulos;
-    if (custo !== undefined) update.custo_total = custo;
+    // Custo: zero/indefinido da API NÃO pode vencer o valor calculado.
+    const custoApi = num(lic.custoTotal ?? lic.valorTotal);
+    let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
+    if (!custo || custo <= 0) {
+      custo = (produto ?? "").toUpperCase().includes("GESTAO LEGAL")
+        ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
+        : Math.round(qtdPdv * 29.9 * 100) / 100;
+    }
+    update.custo_total = custo;
     if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
       update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
     }
@@ -514,12 +523,14 @@ function mapLicenciamentoToRow(
   if (filiais !== undefined) row.numero_filiais = filiais;
   const usuarios = num(lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
-  const qtdPdv = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
-  if (qtdPdv !== undefined) row.qtd_pdv = qtdPdv;
-  const qtdComandas =
+  // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
+  const qtdPdvApi = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
+  const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : 1;
+  row.qtd_pdv = qtdPdv;
+  const qtdComandasApi =
     num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas) ?? pdvComandas;
-  if (qtdComandas !== undefined) row.qtd_comandas = qtdComandas;
-  if (pdvComandas !== undefined) row.qtd_pdv_comandas = pdvComandas;
+  row.qtd_comandas = qtdComandasApi && qtdComandasApi > 0 ? qtdComandasApi : qtdPdv;
+  row.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
   const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
   const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
@@ -528,9 +539,15 @@ function mapLicenciamentoToRow(
     qtdPdv,
   );
   if (modulosNorm) row.modulos_ativos = modulosNorm;
-  const custo =
-    num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ?? custoModulos;
-  if (custo !== undefined) row.custo_total = custo;
+  // Custo: zero/indefinido da API NÃO pode vencer o valor calculado.
+  const custoApi = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
+  let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
+  if (!custo || custo <= 0) {
+    custo = (produto ?? "").toUpperCase().includes("GESTAO LEGAL")
+      ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
+      : Math.round(qtdPdv * 29.9 * 100) / 100;
+  }
+  row.custo_total = custo;
   if (Array.isArray(lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe)) {
     row.licencas_detalhe = lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe;
   }
