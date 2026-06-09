@@ -439,7 +439,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
     // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
     const qtdPdvApi = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
-    const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
+    const pdvFallback = isProdutoGestaoLegal(produto) ? 3 : 1;
     const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
     update.qtd_pdv = qtdPdv;
     update.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
@@ -460,7 +460,7 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const custoApi = num(lic.custoTotal ?? lic.valorTotal);
     let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
     if (!custo || custo <= 0) {
-      custo = (produto ?? "").toUpperCase().includes("GESTAO LEGAL")
+      custo = isProdutoGestaoLegal(produto)
         ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
         : Math.round(qtdPdv * 29.9 * 100) / 100;
     }
@@ -607,7 +607,7 @@ function mapLicenciamentoToRow(
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
   // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
   const qtdPdvApi = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
-  const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
+  const pdvFallback = isProdutoGestaoLegal(produto) ? 3 : 1;
   const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
   row.qtd_pdv = qtdPdv;
   row.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
@@ -626,7 +626,7 @@ function mapLicenciamentoToRow(
   const custoApi = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
   let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
   if (!custo || custo <= 0) {
-    custo = (produto ?? "").toUpperCase().includes("GESTAO LEGAL")
+    custo = isProdutoGestaoLegal(produto)
       ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
       : Math.round(qtdPdv * 29.9 * 100) / 100;
   }
