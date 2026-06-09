@@ -29,6 +29,108 @@ type ClienteRow = {
   last_sync: string | null;
 };
 
+type TabletCloudLicenciamentoFilial = {
+  ativo?: boolean;
+  matriz?: boolean;
+  codfilial?: number;
+  nomefilial?: string;
+  cpf_cnpj?: string;
+  datacadastro?: string;
+  email?: string;
+};
+
+type TabletCloudLicenciamentoItem = {
+  codgrupo?: number;
+  ativo?: boolean;
+  nomegrupo?: string;
+  cpf_cnpj?: string;
+  produto?: string;
+  qtdLojasAtivas?: number;
+  qtdLojasDesativadas?: number;
+  datacadastro?: string;
+  filiais?: TabletCloudLicenciamentoFilial[];
+};
+
+type TabletCloudLicenciamentoResponse = {
+  total_count?: number;
+  total?: number;
+  offset?: number;
+  data?: TabletCloudLicenciamentoItem[];
+};
+
+function normalizeDigits(value: string | null | undefined): string {
+  return (value ?? "").replace(/\D/g, "");
+}
+
+function getTabletCloudOrigin(rawBase: string): string {
+  const trimmed = rawBase.trim().replace(/\/+$/g, "");
+
+  try {
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    return new URL(withProtocol).origin;
+  } catch {
+    return trimmed
+      .replace(/\/+(oem_licenciamentos|token)$/i, "")
+      .replace(/\/+(licenciamento\/.*)$/i, "");
+  }
+}
+
+function redactSensitiveUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    if (url.searchParams.has("token")) url.searchParams.set("token", "***");
+    if (url.searchParams.has("access_token")) url.searchParams.set("access_token", "***");
+    return url.toString();
+  } catch {
+    return rawUrl
+      .replace(/([?&]token=)[^&]+/gi, "$1***")
+      .replace(/([?&]access_token=)[^&]+/gi, "$1***");
+  }
+}
+
+function findTabletCloudLicenca(
+  items: TabletCloudLicenciamentoItem[],
+  cnpjCpf: string,
+): { item: TabletCloudLicenciamentoItem; filial?: TabletCloudLicenciamentoFilial } | null {
+  const target = normalizeDigits(cnpjCpf);
+
+  for (const item of items) {
+    if (normalizeDigits(item.cpf_cnpj) === target) {
+      return { item };
+    }
+
+    const filial = Array.isArray(item.filiais)
+      ? item.filiais.find((entry) => normalizeDigits(entry.cpf_cnpj) === target)
+      : undefined;
+
+    if (filial) {
+      return { item, filial };
+    }
+  }
+
+  return null;
+}
+
+function mapTabletCloudLicencaToUpdate(
+  current: ClienteRow,
+  item: TabletCloudLicenciamentoItem,
+  filial?: TabletCloudLicenciamentoFilial,
+): Record<string, unknown> {
+  const totalFiliais = Array.isArray(item.filiais)
+    ? item.filiais.length
+    : (item.qtdLojasAtivas ?? 0) + (item.qtdLojasDesativadas ?? 0);
+  const ativo = filial?.ativo ?? item.ativo ?? current.status?.toLowerCase() === "ativo";
+
+  return {
+    nome_fantasia: filial?.nomefilial ?? current.nome_fantasia,
+    grupo_economico: item.nomegrupo ?? current.grupo_economico,
+    produto_principal: item.produto ?? current.produto_principal,
+    numero_filiais: totalFiliais || current.numero_filiais,
+    status: ativo ? "Ativo" : "Inativo",
+    bloqueado: !ativo,
+  };
+}
+
 function toModulos(v: unknown): Modulo[] {
   if (!Array.isArray(v)) return [];
   return v
