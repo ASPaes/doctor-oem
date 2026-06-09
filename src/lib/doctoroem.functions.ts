@@ -602,14 +602,87 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
  * Normaliza o array real de módulos da API, preservando os campos originais e
  * adicionando aliases usados pela interface.
  */
+const VALOR_UNITARIO_PDV_PADRAO = 10.0;
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function makeModuloSintetico(
+  id: string,
+  nome: string,
+  quantidade: number,
+  valorUnitario: number,
+  total: number,
+): Record<string, unknown> {
+  return {
+    id,
+    nome,
+    descricao: `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`,
+    ativo: true,
+    status: "Ativo",
+    quantidade,
+    valorUnitario,
+    valor_unitario: valorUnitario,
+    total,
+    valorTotal: total,
+    valor_total: total,
+    valor: total,
+  };
+}
+
+function getFilialObj(lic: Record<string, unknown>): Record<string, unknown> | undefined {
+  return lic.filial && typeof lic.filial === "object" && !Array.isArray(lic.filial)
+    ? (lic.filial as Record<string, unknown>)
+    : undefined;
+}
+
 function extrairModulosECusto(
   lic: Record<string, unknown>,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
-  const rawModulos = getRawModulosFromLicenciamento(lic);
-  if (!rawModulos?.length) return {};
+  const filialObj = getFilialObj(lic);
+  const valorTotalFilial = toFiniteNumber(filialObj?.valorTotal ?? lic.valorTotal);
+  const pdvComandas =
+    toFiniteNumber(filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.qtdPdvComandas) ?? 0;
 
-  const modulos = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
-  return { modulos, custo: sumModuloTotals(modulos) };
+  const rawModulos = getRawModulosFromLicenciamento(lic) ?? [];
+  const modulosApi = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
+
+  const nomeUpper = (m: Record<string, unknown>) => getModuloNome(m, "").toUpperCase();
+  const temPdv = modulosApi.some((m) => /PDV|COMANDA/.test(nomeUpper(m)));
+  const temGestao = modulosApi.some((m) => /GEST/.test(nomeUpper(m)));
+
+  const extras: Record<string, unknown>[] = [];
+
+  // "Licença PDV": a API não traz na lista de módulos — vem como filial.pdvComandas.
+  if (!temPdv && pdvComandas > 0) {
+    const unitPdv =
+      toFiniteNumber(lic.valorPdv ?? filialObj?.valorPdv ?? lic.valorUnitarioPdv) ??
+      VALOR_UNITARIO_PDV_PADRAO;
+    extras.push(
+      makeModuloSintetico("licenca-pdv", "Licença PDV", pdvComandas, unitPdv, round2(pdvComandas * unitPdv)),
+    );
+  }
+
+  // "Gestao" (licença base do produto): o restante do valorTotal da filial
+  // após descontar PDVs e demais módulos (ex.: 62.90 − 30.00 − 3.00 = 29.90).
+  if (!temGestao && valorTotalFilial !== undefined) {
+    const somaParcial = round2(sumModuloTotals(modulosApi) + sumModuloTotals(extras));
+    const restante = round2(valorTotalFilial - somaParcial);
+    if (restante > 0) {
+      const nomeProduto =
+        typeof lic.nomeProduto === "string" && lic.nomeProduto.trim() !== ""
+          ? lic.nomeProduto
+          : "Gestao";
+      extras.unshift(makeModuloSintetico("gestao", nomeProduto, 1, restante, restante));
+    }
+  }
+
+  const modulos = [...extras, ...modulosApi];
+  if (!modulos.length) return {};
+
+  const custo = valorTotalFilial ?? sumModuloTotals(modulos);
+  return { modulos, custo: round2(custo) };
 }
 
 /**
