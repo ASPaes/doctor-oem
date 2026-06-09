@@ -43,7 +43,7 @@ function ClientesList() {
     mutationFn: () => bulkSync(),
     onSuccess: (res) => {
       toast.success(
-        `Base sincronizada: ${res.inserted} novo(s), ${res.updated} atualizado(s).`,
+        `🎉 ${res.total} empresa(s) real(is) importada(s) com sucesso! ${res.inserted} nova(s) e ${res.updated} atualizada(s) (${res.scanned} códigos verificados).`,
       );
       queryClient.invalidateQueries({ queryKey: ["doctoroem", "clientes"] });
     },
