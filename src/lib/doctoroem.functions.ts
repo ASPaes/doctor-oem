@@ -262,10 +262,16 @@ function unwrapLicenciamentoPayload(raw: Record<string, unknown>): Record<string
 
 function mapModuloApiToStorage(modulo: Record<string, unknown>, index: number): Record<string, unknown> {
   const quantidade = getModuloQuantidade(modulo);
-  const valorUnitario = getModuloValorUnitario(modulo);
   const valorTotal = getModuloValorTotal(modulo);
+  let valorUnitario = getModuloValorUnitario(modulo);
+  // Deriva o unitário quando a API só manda o total (ex.: Estoque: qtd 1, valor 3.00).
+  if (valorUnitario === 0 && quantidade > 0 && valorTotal > 0) {
+    valorUnitario = Math.round((valorTotal / quantidade) * 100) / 100;
+  }
   const ativo = isModuloAtivo(modulo);
-  const nome = getModuloNome(modulo, `Módulo ${index + 1}`);
+  let nome = getModuloNome(modulo, `Módulo ${index + 1}`);
+  // Regra de negócio: módulo de PDV/Comandas aparece como "Licença PDV" na matriz.
+  if (/PDV|COMANDA/i.test(nome)) nome = "Licença PDV";
 
   return {
     ...modulo,
