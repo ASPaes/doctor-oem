@@ -493,7 +493,6 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 function extrairModulosECusto(
   lic: Record<string, unknown>,
   produto: string | undefined,
-  pdvs: number | undefined,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
   const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
 
