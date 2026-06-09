@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsuariosRouteImport } from './routes/usuarios'
+import { Route as GatewayRouteImport } from './routes/gateway'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClientesIndexRouteImport } from './routes/clientes.index'
 import { Route as ClientesIdRouteImport } from './routes/clientes.$id'
@@ -17,6 +18,11 @@ import { Route as ClientesIdRouteImport } from './routes/clientes.$id'
 const UsuariosRoute = UsuariosRouteImport.update({
   id: '/usuarios',
   path: '/usuarios',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GatewayRoute = GatewayRouteImport.update({
+  id: '/gateway',
+  path: '/gateway',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -37,12 +43,14 @@ const ClientesIdRoute = ClientesIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/gateway': typeof GatewayRoute
   '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes/': typeof ClientesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/gateway': typeof GatewayRoute
   '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes': typeof ClientesIndexRoute
@@ -50,20 +58,28 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/gateway': typeof GatewayRoute
   '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes/': typeof ClientesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/usuarios' | '/clientes/$id' | '/clientes/'
+  fullPaths: '/' | '/gateway' | '/usuarios' | '/clientes/$id' | '/clientes/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/usuarios' | '/clientes/$id' | '/clientes'
-  id: '__root__' | '/' | '/usuarios' | '/clientes/$id' | '/clientes/'
+  to: '/' | '/gateway' | '/usuarios' | '/clientes/$id' | '/clientes'
+  id:
+    | '__root__'
+    | '/'
+    | '/gateway'
+    | '/usuarios'
+    | '/clientes/$id'
+    | '/clientes/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  GatewayRoute: typeof GatewayRoute
   UsuariosRoute: typeof UsuariosRoute
   ClientesIdRoute: typeof ClientesIdRoute
   ClientesIndexRoute: typeof ClientesIndexRoute
@@ -76,6 +92,13 @@ declare module '@tanstack/react-router' {
       path: '/usuarios'
       fullPath: '/usuarios'
       preLoaderRoute: typeof UsuariosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gateway': {
+      id: '/gateway'
+      path: '/gateway'
+      fullPath: '/gateway'
+      preLoaderRoute: typeof GatewayRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -104,6 +127,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  GatewayRoute: GatewayRoute,
   UsuariosRoute: UsuariosRoute,
   ClientesIdRoute: ClientesIdRoute,
   ClientesIndexRoute: ClientesIndexRoute,
