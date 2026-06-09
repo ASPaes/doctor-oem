@@ -342,6 +342,199 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
   });
 
 // ============================================================
+// Bulk sync — popula a base com clientes fictícios usando o
+// mesmo fallback inteligente da sync individual.
+// ============================================================
+
+type SeedCliente = {
+  empresa_codigo: string;
+  filial_codigo: string;
+  cnpj_cpf: string;
+  razao_social: string;
+  nome_fantasia: string;
+  grupo_economico: string;
+  produto_principal: string;
+  numero_filiais: number;
+  status: string;
+  bloqueado: boolean;
+  motivo_bloqueio: string | null;
+  usuarios_adicionais: number;
+  qtd_pdv: number;
+  qtd_comandas: number;
+  qtd_pdv_comandas: number;
+  custo_total: number;
+  modulos_ativos: string[];
+  licencas_detalhe: { tipo: string; quantidade: number; status: string }[];
+};
+
+const SEED_CLIENTES: SeedCliente[] = [
+  {
+    empresa_codigo: "EMP-2001",
+    filial_codigo: "001",
+    cnpj_cpf: "45.543.915/0001-81",
+    razao_social: "Mercado Central Comércio de Alimentos LTDA",
+    nome_fantasia: "Mercado Central",
+    grupo_economico: "Grupo Central Varejo",
+    produto_principal: "Doctor ERP Pro",
+    numero_filiais: 3,
+    status: "Ativo",
+    bloqueado: false,
+    motivo_bloqueio: null,
+    usuarios_adicionais: 8,
+    qtd_pdv: 12,
+    qtd_comandas: 0,
+    qtd_pdv_comandas: 12,
+    custo_total: 1890.0,
+    modulos_ativos: ["NF-e", "NFC-e", "Estoque", "Financeiro", "BI"],
+    licencas_detalhe: [
+      { tipo: "PDV", quantidade: 12, status: "Ativo" },
+      { tipo: "NF-e", quantidade: 1, status: "Ativo" },
+      { tipo: "NFC-e", quantidade: 1, status: "Ativo" },
+    ],
+  },
+  {
+    empresa_codigo: "EMP-2002",
+    filial_codigo: "001",
+    cnpj_cpf: "11.222.333/0001-44",
+    razao_social: "Posto Alvorada Combustíveis LTDA",
+    nome_fantasia: "Posto Alvorada",
+    grupo_economico: "Rede Alvorada",
+    produto_principal: "Doctor ERP Lite",
+    numero_filiais: 1,
+    status: "Ativo",
+    bloqueado: false,
+    motivo_bloqueio: null,
+    usuarios_adicionais: 2,
+    qtd_pdv: 4,
+    qtd_comandas: 0,
+    qtd_pdv_comandas: 4,
+    custo_total: 549.9,
+    modulos_ativos: ["NFC-e", "Financeiro"],
+    licencas_detalhe: [
+      { tipo: "PDV", quantidade: 4, status: "Ativo" },
+      { tipo: "NFC-e", quantidade: 1, status: "Ativo" },
+    ],
+  },
+  {
+    empresa_codigo: "EMP-2003",
+    filial_codigo: "001",
+    cnpj_cpf: "27.865.757/0001-02",
+    razao_social: "Farmácia Preço Baixo Drogarias LTDA",
+    nome_fantasia: "Farmácia Preço Baixo",
+    grupo_economico: "Grupo Saúde Popular",
+    produto_principal: "Doctor ERP Pro",
+    numero_filiais: 5,
+    status: "Ativo",
+    bloqueado: false,
+    motivo_bloqueio: null,
+    usuarios_adicionais: 12,
+    qtd_pdv: 18,
+    qtd_comandas: 0,
+    qtd_pdv_comandas: 18,
+    custo_total: 2740.5,
+    modulos_ativos: ["NF-e", "NFC-e", "Estoque", "Financeiro", "SNGPC", "BI"],
+    licencas_detalhe: [
+      { tipo: "PDV", quantidade: 18, status: "Ativo" },
+      { tipo: "NF-e", quantidade: 1, status: "Ativo" },
+      { tipo: "NFC-e", quantidade: 1, status: "Ativo" },
+      { tipo: "SNGPC", quantidade: 1, status: "Ativo" },
+    ],
+  },
+  {
+    empresa_codigo: "EMP-2004",
+    filial_codigo: "001",
+    cnpj_cpf: "33.014.556/0001-96",
+    razao_social: "Bar e Restaurante Esquina LTDA",
+    nome_fantasia: "Esquina Bar & Grill",
+    grupo_economico: "Esquina Gastronomia",
+    produto_principal: "Doctor ERP Lite",
+    numero_filiais: 1,
+    status: "Ativo",
+    bloqueado: true,
+    motivo_bloqueio: "Inadimplência 32 dias",
+    usuarios_adicionais: 4,
+    qtd_pdv: 2,
+    qtd_comandas: 24,
+    qtd_pdv_comandas: 26,
+    custo_total: 980.0,
+    modulos_ativos: ["NFC-e", "Comanda", "Financeiro"],
+    licencas_detalhe: [
+      { tipo: "PDV", quantidade: 2, status: "Ativo" },
+      { tipo: "Comanda", quantidade: 24, status: "Ativo" },
+      { tipo: "NFC-e", quantidade: 1, status: "Suspenso" },
+    ],
+  },
+];
+
+export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
+  async (): Promise<{ inserted: number; updated: number; total: number }> => {
+    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
+    const supabase = getDoctorOemAdmin();
+
+    // 1) Simula a chamada em lote ao parceiro — usa o mesmo fallback inteligente.
+    const FALLBACK_BASE = "https://api.pdvlegal.com.br/api";
+    const rawBase = (process.env.OEM_API_BASE_URL ?? FALLBACK_BASE).trim();
+    const apiUrl = rawBase.replace(/\{[^}]*\}\/?$/g, "").replace(/\/+$/g, "");
+    try {
+      const safeUrl = redactSensitiveUrl(`${apiUrl}/oem/empresas`);
+      console.log("[OEM bulkSync] tentativa real:", safeUrl);
+      const resp = await fetch(`${apiUrl}/oem/empresas`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          client_id: process.env.OEM_CLIENT_ID ?? "",
+          client_secret: process.env.OEM_CLIENT_SECRET ?? "",
+        },
+      });
+      console.log("[OEM bulkSync] status real:", resp.status);
+    } catch (e) {
+      console.warn("[OEM bulkSync] rede indisponível, usando seeds:", (e as Error).message);
+    }
+
+    // 2) Identifica quais CNPJs já existem para diferenciar insert/update.
+    const cnpjs = SEED_CLIENTES.map((s) => s.cnpj_cpf);
+    const { data: existing, error: selErr } = await supabase
+      .from("clientes_oem")
+      .select("id, cnpj_cpf")
+      .in("cnpj_cpf", cnpjs);
+    if (selErr) throw new Error(`DoctorOEM bulkSync (load): ${selErr.message}`);
+
+    const existingByCnpj = new Map<string, string>();
+    for (const row of existing ?? []) {
+      existingByCnpj.set(row.cnpj_cpf as string, row.id as string);
+    }
+
+    const now = new Date().toISOString();
+    const toInsert = SEED_CLIENTES
+      .filter((s) => !existingByCnpj.has(s.cnpj_cpf))
+      .map((s) => ({ ...s, last_sync: now }));
+    const toUpdate = SEED_CLIENTES.filter((s) => existingByCnpj.has(s.cnpj_cpf));
+
+    // 3) Insere os novos em lote.
+    if (toInsert.length > 0) {
+      const { error: insErr } = await supabase.from("clientes_oem").insert(toInsert);
+      if (insErr) throw new Error(`DoctorOEM bulkSync (insert): ${insErr.message}`);
+    }
+
+    // 4) Atualiza os existentes individualmente (mantém o id).
+    for (const s of toUpdate) {
+      const id = existingByCnpj.get(s.cnpj_cpf)!;
+      const { error: updErr } = await supabase
+        .from("clientes_oem")
+        .update({ ...s, last_sync: now })
+        .eq("id", id);
+      if (updErr) throw new Error(`DoctorOEM bulkSync (update ${s.cnpj_cpf}): ${updErr.message}`);
+    }
+
+    return {
+      inserted: toInsert.length,
+      updated: toUpdate.length,
+      total: SEED_CLIENTES.length,
+    };
+  },
+);
+
+// ============================================================
 // Profiles / Usuários (combina profiles + auth.users)
 // ============================================================
 

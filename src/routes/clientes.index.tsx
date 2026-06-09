@@ -1,12 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Search, Building2 } from "lucide-react";
+import { Search, Building2, RefreshCw } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
-import { listClientes } from "@/lib/doctoroem.functions";
-import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
+import { listClientes, bulkSyncClientes } from "@/lib/doctoroem.functions";
+import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useRole } from "@/lib/role-context";
+import { toast } from "sonner";
 
 const clientesQueryOptions = queryOptions({
   queryKey: ["doctoroem", "clientes"],
@@ -34,6 +37,18 @@ function ClientesList() {
   const [q, setQ] = useState("");
   const { canSeeFinance } = useRole();
   const { data: clientes } = useSuspenseQuery(clientesQueryOptions);
+  const queryClient = useQueryClient();
+  const bulkSync = useServerFn(bulkSyncClientes);
+  const syncMutation = useMutation({
+    mutationFn: () => bulkSync(),
+    onSuccess: (res) => {
+      toast.success(
+        `Base sincronizada: ${res.inserted} novo(s), ${res.updated} atualizado(s).`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["doctoroem", "clientes"] });
+    },
+    onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
+  });
   const list = clientes.filter(
     (c) =>
       !q ||
@@ -61,6 +76,14 @@ function ClientesList() {
             className="pl-9 glass-panel border-border"
           />
         </div>
+        <Button
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending}
+          className="gap-2"
+        >
+          <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? "animate-spin" : ""}`} />
+          {syncMutation.isPending ? "Sincronizando…" : "Sincronizar Base de Clientes"}
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
