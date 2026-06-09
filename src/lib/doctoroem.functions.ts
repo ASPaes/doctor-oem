@@ -522,67 +522,77 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
     }
     console.log("[OEM bulkSync] OAuth2: access_token obtido com sucesso.");
 
-    // 3) ETAPA 2 — Varredura real: empresa-base 1620643, filiais 1..N.
-    //    Para a varredura após 3 misses (404) consecutivos.
-    const COD_EMPRESA_BASE = Number(process.env.OEM_COD_EMPRESA ?? 1620643);
-    const MAX_FILIAIS = 20;
-    const MAX_MISSES_CONSECUTIVOS = 3;
+    // 3) ETAPA 2 — Varredura sequencial REAL: codEmpresa 1..30 com codFilial
+    //    fixo em 1 (a grande maioria dos clientes começa pela filial 1).
+    //    As requisições são disparadas de forma assíncrona em paralelo.
+    const COD_EMPRESA_INICIO = Number(process.env.OEM_COD_EMPRESA_INICIO ?? 1);
+    const COD_EMPRESA_FIM = Number(process.env.OEM_COD_EMPRESA_FIM ?? 30);
+    const COD_FILIAL = 1;
 
-    const encontrados: Record<string, unknown>[] = [];
-    let scanned = 0;
-    let missesConsecutivos = 0;
+    const empresas: number[] = [];
+    for (let cod = COD_EMPRESA_INICIO; cod <= COD_EMPRESA_FIM; cod++) empresas.push(cod);
 
-    for (let codFilial = 1; codFilial <= MAX_FILIAIS; codFilial++) {
-      const licUrl = `${API_ORIGIN}/v1/licenciamento/${COD_EMPRESA_BASE}/${codFilial}`;
-      console.log("[OEM bulkSync] GET licenciamento:", redactSensitiveUrl(licUrl));
-      scanned++;
+    console.log(
+      `[OEM bulkSync] iniciando varredura assíncrona: empresas ${COD_EMPRESA_INICIO}..${COD_EMPRESA_FIM}, filial ${COD_FILIAL}.`,
+    );
 
-      let resp: Response;
-      try {
-        resp = await fetch(licUrl, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            Accept: "application/json",
-          },
-        });
-      } catch (e) {
-        console.error("[OEM bulkSync] erro de rede na filial", codFilial, (e as Error).message);
-        missesConsecutivos++;
-        if (missesConsecutivos >= MAX_MISSES_CONSECUTIVOS) break;
-        continue;
-      }
+    const resultados = await Promise.all(
+      empresas.map(async (codEmpresa): Promise<Record<string, unknown>[]> => {
+        const licUrl = `${API_ORIGIN}/v1/licenciamento/${codEmpresa}/${COD_FILIAL}`;
 
-      if (!resp.ok) {
-        console.warn("[OEM bulkSync] filial", codFilial, "retornou HTTP", resp.status);
-        missesConsecutivos++;
-        if (missesConsecutivos >= MAX_MISSES_CONSECUTIVOS) break;
-        continue;
-      }
-
-      missesConsecutivos = 0;
-      const raw = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-      const payload =
-        raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
-          ? (raw.data as Record<string, unknown>)
-          : raw;
-
-      // A rota pode devolver um objeto único ou uma lista de licenciamentos.
-      const items: Record<string, unknown>[] = Array.isArray(raw.data)
-        ? (raw.data as Record<string, unknown>[])
-        : [payload];
-
-      for (const item of items) {
-        const row = mapLicenciamentoToRow(item, COD_EMPRESA_BASE, codFilial);
-        if (row) {
-          console.log(
-            "[OEM bulkSync] licenciamento real mapeado:",
-            JSON.stringify(item).slice(0, 300),
+        let resp: Response;
+        try {
+          resp = await fetch(licUrl, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json",
+            },
+          });
+        } catch (e) {
+          console.error(
+            "[OEM bulkSync] erro de rede na empresa",
+            codEmpresa,
+            (e as Error).message,
           );
-          encontrados.push(row);
+          return [];
         }
-      }
-    }
+
+        if (!resp.ok) {
+          console.warn("[OEM bulkSync] empresa", codEmpresa, "retornou HTTP", resp.status);
+          return [];
+        }
+
+        const raw = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+        const payload =
+          raw.data && typeof raw.data === "object" && !Array.isArray(raw.data)
+            ? (raw.data as Record<string, unknown>)
+            : raw;
+
+        // A rota pode devolver um objeto único ou uma lista de licenciamentos.
+        const items: Record<string, unknown>[] = Array.isArray(raw.data)
+          ? (raw.data as Record<string, unknown>[])
+          : [payload];
+
+        const rows: Record<string, unknown>[] = [];
+        for (const item of items) {
+          const row = mapLicenciamentoToRow(item, codEmpresa, COD_FILIAL);
+          if (row) {
+            console.log(
+              "[OEM bulkSync] licenciamento real mapeado (empresa",
+              codEmpresa,
+              "):",
+              JSON.stringify(item).slice(0, 300),
+            );
+            rows.push(row);
+          }
+        }
+        return rows;
+      }),
+    );
+
+    const scanned = empresas.length;
+    const encontrados: Record<string, unknown>[] = resultados.flat();
 
     console.log(
       `[OEM bulkSync] varredura concluída: ${scanned} rotas testadas, ${encontrados.length} licenciamentos reais.`,
@@ -590,7 +600,7 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
 
     if (encontrados.length === 0) {
       throw new Error(
-        `OEM API: varredura em /v1/licenciamento/${COD_EMPRESA_BASE}/{filial} não retornou nenhum licenciamento (${scanned} rotas testadas). Nenhum dado fictício foi inserido.`,
+        `OEM API: varredura em /v1/licenciamento/{${COD_EMPRESA_INICIO}..${COD_EMPRESA_FIM}}/${COD_FILIAL} não retornou nenhum licenciamento (${scanned} empresas testadas). Nenhum dado fictício foi inserido.`,
       );
     }
 
