@@ -347,24 +347,32 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const bool = (v: unknown): boolean | undefined =>
       typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
 
-    const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado);
-    const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
+  const filialObjSync =
+    lic.filial && typeof lic.filial === "object" && !Array.isArray(lic.filial)
+      ? (lic.filial as Record<string, unknown>)
+      : undefined;
+
+  const bloqueado = bool(lic.bloquearLicenca ?? lic.bloqueado);
+  const pdvComandas = num(lic.pdvComandas ?? lic.qtdPdvComandas);
 
     const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
 
-    const empresaCodigo = str(lic.codEmpresa) ?? num(lic.codEmpresa)?.toString();
-    const filialCodigo = str(lic.codFilial) ?? num(lic.codFilial)?.toString();
+    const empresaCodigo =
+      num(lic.codEmpresa ?? lic.codeEmpresa)?.toString() ?? str(lic.codEmpresa ?? lic.codeEmpresa);
+    const filialCodigo =
+      num(lic.codFilial ?? filialObjSync?.codigo)?.toString() ??
+      str(lic.codFilial ?? filialObjSync?.codigo);
     if (empresaCodigo) update.empresa_codigo = empresaCodigo;
     if (filialCodigo) update.filial_codigo = filialCodigo;
-    const nomeLoja = str(lic.nomeLoja ?? lic.nomeFantasia);
+    const nomeLoja = str(lic.nomeEmpresa ?? lic.nomeLoja ?? lic.nomeFantasia);
     if (nomeLoja) update.nome_fantasia = nomeLoja;
-    const razao = str(lic.razaoSocial ?? lic.razao_social);
+    const razao = str(lic.razaoSocial ?? lic.razao_social ?? lic.nomeEmpresa);
     if (razao) update.razao_social = razao;
-    const cpfCnpj = str(lic.cpfCnpj ?? lic.cnpjCpf);
+    const cpfCnpj = str(lic.cnpjEmpresa ?? lic.cpfCnpj ?? lic.cnpjCpf);
     if (cpfCnpj) update.cnpj_cpf = cpfCnpj;
     const grupo = str(lic.grupoEconomico ?? lic.nomegrupo);
     if (grupo) update.grupo_economico = grupo;
-    const produto = str(lic.produto ?? lic.produtoPrincipal);
+    const produto = str(lic.nomeProduto ?? lic.produto ?? lic.produtoPrincipal);
     if (produto) update.produto_principal = produto;
     const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
     if (filiais !== undefined) update.numero_filiais = filiais;
@@ -375,10 +383,8 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     const qtdComandas = num(lic.qtdComandas ?? lic.comandas);
     if (qtdComandas !== undefined) update.qtd_comandas = qtdComandas;
     if (pdvComandas !== undefined) update.qtd_pdv_comandas = pdvComandas;
-    if (bloqueado !== undefined) {
-      update.bloqueado = bloqueado;
-      update.status = bloqueado ? "Bloqueado" : "Ativo";
-    }
+    update.bloqueado = bloqueado ?? false;
+    update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
     if (motivo) update.motivo_bloqueio = motivo;
     const custo = num(lic.custoTotal ?? lic.valorTotal);
@@ -420,11 +426,16 @@ function mapLicenciamentoToRow(
   const bool = (v: unknown): boolean | undefined =>
     typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
 
+  const filialObj =
+    lic.filial && typeof lic.filial === "object" && !Array.isArray(lic.filial)
+      ? (lic.filial as Record<string, unknown>)
+      : undefined;
+
   const cpfCnpj = str(
-    lic.cpfCnpj ?? lic.CpfCnpj ?? lic.cnpjCpf ?? lic.CnpjCpf ?? lic.cpf_cnpj ?? lic.cnpj ?? lic.Cnpj ?? lic.documento,
+    lic.cnpjEmpresa ?? lic.CnpjEmpresa ?? lic.cpfCnpj ?? lic.CpfCnpj ?? lic.cnpjCpf ?? lic.CnpjCpf ?? lic.cpf_cnpj ?? lic.cnpj ?? lic.Cnpj ?? lic.documento,
   );
   const nomeLoja = str(
-    lic.nomeLoja ?? lic.NomeLoja ?? lic.nome ?? lic.Nome ?? lic.nomeFantasia ?? lic.NomeFantasia ?? lic.nomefilial ?? lic.NomeFilial,
+    lic.nomeEmpresa ?? lic.NomeEmpresa ?? lic.nomeLoja ?? lic.NomeLoja ?? lic.nome ?? lic.Nome ?? lic.nomeFantasia ?? lic.NomeFantasia ?? lic.nomefilial ?? lic.NomeFilial,
   );
   // Sem CNPJ nem nome não há como identificar o cliente — descarta.
   if (!cpfCnpj && !nomeLoja) return null;
@@ -433,8 +444,8 @@ function mapLicenciamentoToRow(
   const pdvComandas = num(lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas);
 
   const row: Record<string, unknown> = {
-    empresa_codigo: String(num(lic.codEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
-    filial_codigo: String(num(lic.codFilial ?? lic.CodFilial) ?? codFilial),
+    empresa_codigo: String(num(lic.codEmpresa ?? lic.codeEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
+    filial_codigo: String(num(lic.codFilial ?? lic.CodFilial ?? filialObj?.codigo) ?? codFilial),
     cnpj_cpf: cpfCnpj ?? `${codEmpresa}/${codFilial}`,
     nome_fantasia: nomeLoja ?? `Empresa ${codEmpresa}/${codFilial}`,
     bloqueado,
@@ -442,11 +453,11 @@ function mapLicenciamentoToRow(
     last_sync: new Date().toISOString(),
   };
 
-  const razao = str(lic.razaoSocial ?? lic.RazaoSocial ?? lic.razao_social);
+  const razao = str(lic.razaoSocial ?? lic.RazaoSocial ?? lic.razao_social ?? lic.nomeEmpresa ?? lic.NomeEmpresa);
   if (razao) row.razao_social = razao;
   const grupo = str(lic.grupoEconomico ?? lic.GrupoEconomico ?? lic.nomegrupo ?? lic.NomeGrupo);
   if (grupo) row.grupo_economico = grupo;
-  const produto = str(lic.produto ?? lic.Produto ?? lic.produtoPrincipal ?? lic.ProdutoPrincipal);
+  const produto = str(lic.nomeProduto ?? lic.NomeProduto ?? lic.produto ?? lic.Produto ?? lic.produtoPrincipal ?? lic.ProdutoPrincipal);
   if (produto) row.produto_principal = produto;
   const filiais = num(lic.numeroFiliais ?? lic.NumeroFiliais ?? lic.qtdFiliais ?? lic.QtdFiliais);
   if (filiais !== undefined) row.numero_filiais = filiais;
@@ -595,12 +606,13 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
     console.log("JSON RETORNADO:", JSON.stringify(raw));
 
     // 5) Mapeia o JSON real e atualiza por cima do registro.
-    const row = mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL);
-    if (!row) {
-      throw new Error(
-        `OEM API: campos não identificados. JSON recebido: ${JSON.stringify(raw).substring(0, 150)}`,
-      );
-    }
+    const row =
+      mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL) ?? {
+        empresa_codigo: String(COD_EMPRESA),
+        filial_codigo: String(COD_FILIAL),
+        status: "Ativo",
+        last_sync: new Date().toISOString(),
+      };
 
     const { error: updErr } = await supabase
       .from("clientes_oem")
