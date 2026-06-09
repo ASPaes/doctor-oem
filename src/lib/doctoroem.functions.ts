@@ -426,11 +426,16 @@ function mapLicenciamentoToRow(
   const bool = (v: unknown): boolean | undefined =>
     typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
 
+  const filialObj =
+    lic.filial && typeof lic.filial === "object" && !Array.isArray(lic.filial)
+      ? (lic.filial as Record<string, unknown>)
+      : undefined;
+
   const cpfCnpj = str(
-    lic.cpfCnpj ?? lic.CpfCnpj ?? lic.cnpjCpf ?? lic.CnpjCpf ?? lic.cpf_cnpj ?? lic.cnpj ?? lic.Cnpj ?? lic.documento,
+    lic.cnpjEmpresa ?? lic.CnpjEmpresa ?? lic.cpfCnpj ?? lic.CpfCnpj ?? lic.cnpjCpf ?? lic.CnpjCpf ?? lic.cpf_cnpj ?? lic.cnpj ?? lic.Cnpj ?? lic.documento,
   );
   const nomeLoja = str(
-    lic.nomeLoja ?? lic.NomeLoja ?? lic.nome ?? lic.Nome ?? lic.nomeFantasia ?? lic.NomeFantasia ?? lic.nomefilial ?? lic.NomeFilial,
+    lic.nomeEmpresa ?? lic.NomeEmpresa ?? lic.nomeLoja ?? lic.NomeLoja ?? lic.nome ?? lic.Nome ?? lic.nomeFantasia ?? lic.NomeFantasia ?? lic.nomefilial ?? lic.NomeFilial,
   );
   // Sem CNPJ nem nome não há como identificar o cliente — descarta.
   if (!cpfCnpj && !nomeLoja) return null;
@@ -439,8 +444,8 @@ function mapLicenciamentoToRow(
   const pdvComandas = num(lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas);
 
   const row: Record<string, unknown> = {
-    empresa_codigo: String(num(lic.codEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
-    filial_codigo: String(num(lic.codFilial ?? lic.CodFilial) ?? codFilial),
+    empresa_codigo: String(num(lic.codEmpresa ?? lic.codeEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
+    filial_codigo: String(num(lic.codFilial ?? lic.CodFilial ?? filialObj?.codigo) ?? codFilial),
     cnpj_cpf: cpfCnpj ?? `${codEmpresa}/${codFilial}`,
     nome_fantasia: nomeLoja ?? `Empresa ${codEmpresa}/${codFilial}`,
     bloqueado,
@@ -448,11 +453,11 @@ function mapLicenciamentoToRow(
     last_sync: new Date().toISOString(),
   };
 
-  const razao = str(lic.razaoSocial ?? lic.RazaoSocial ?? lic.razao_social);
+  const razao = str(lic.razaoSocial ?? lic.RazaoSocial ?? lic.razao_social ?? lic.nomeEmpresa ?? lic.NomeEmpresa);
   if (razao) row.razao_social = razao;
   const grupo = str(lic.grupoEconomico ?? lic.GrupoEconomico ?? lic.nomegrupo ?? lic.NomeGrupo);
   if (grupo) row.grupo_economico = grupo;
-  const produto = str(lic.produto ?? lic.Produto ?? lic.produtoPrincipal ?? lic.ProdutoPrincipal);
+  const produto = str(lic.nomeProduto ?? lic.NomeProduto ?? lic.produto ?? lic.Produto ?? lic.produtoPrincipal ?? lic.ProdutoPrincipal);
   if (produto) row.produto_principal = produto;
   const filiais = num(lic.numeroFiliais ?? lic.NumeroFiliais ?? lic.qtdFiliais ?? lic.QtdFiliais);
   if (filiais !== undefined) row.numero_filiais = filiais;
