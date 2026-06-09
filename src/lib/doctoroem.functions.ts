@@ -136,10 +136,6 @@ function toFiniteNumber(value: unknown): number | undefined {
   return Number.isFinite(num) ? num : undefined;
 }
 
-function isProdutoGestaoLegal(produto: string | undefined): boolean {
-  return (produto ?? "").toUpperCase().includes("GESTAO LEGAL");
-}
-
 function isModuloAtivo(modulo: Record<string, unknown>): boolean {
   const raw = modulo.ativo ?? modulo.active ?? modulo.status ?? modulo.Status;
   if (typeof raw === "boolean") return raw;
@@ -162,69 +158,133 @@ function buildModuloDescricao(
   return `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
 }
 
-const GESTAO_LEGAL_CUSTO_PADRAO = 149.9;
-
-/**
- * Conjunto padrão de módulos do ecossistema GESTAO LEGAL quando a API não
- * envia o array `modulos`: Licença PDV (escala por PDV), Estoque e Mesa/Ficha
- * (módulos ativo/inativo, quantidade 1). Sem valores fixos — a precificação
- * é distribuída depois por distribuirCustoEntreModulos().
- */
-function modulosPadraoGestaoLegal(qtdPdv: number): Record<string, unknown>[] {
-  const base = (id: string, nome: string, quantidade: number) => ({
-    id,
-    nome,
-    quantidade,
-    ativo: true,
-    status: "Ativo",
-    valor: 0,
-    valorUnitario: 0,
-    valor_unitario: 0,
-    valorTotal: 0,
-    valor_total: 0,
-    descricao: "",
-  });
-  return [
-    base("licenca-pdv", "Licença PDV", qtdPdv > 0 ? qtdPdv : 1),
-    base("estoque", "Estoque", 1),
-    base("mesa-ficha", "Mesa/Ficha", 1),
-  ];
+function getModuloNome(modulo: Record<string, unknown>, fallback = "Módulo"): string {
+  const nome =
+    modulo.nome ??
+    modulo.Nome ??
+    modulo.descricao ??
+    modulo.description ??
+    modulo.modulo ??
+    modulo.Modulo;
+  return typeof nome === "string" && nome.trim() !== "" ? nome : fallback;
 }
 
-/**
- * Regra comercial: distribui o custo total contratado entre os módulos
- * ATIVOS proporcionalmente à quantidade de unidades, fechando a soma exata
- * (o último módulo absorve a diferença de arredondamento).
- */
-function distribuirCustoEntreModulos(
-  modulos: Record<string, unknown>[],
-  custoTotal: number,
-): void {
-  const ativos = modulos.filter((m) => isModuloAtivo(m));
-  const totalUnidades = ativos.reduce(
-    (acc, m) => acc + (toFiniteNumber(m.quantidade) ?? 1),
-    0,
-  );
-  if (!ativos.length || totalUnidades <= 0 || custoTotal <= 0) return;
+function getModuloQuantidade(modulo: Record<string, unknown>): number {
+  return toFiniteNumber(modulo.quantidade ?? modulo.Quantidade ?? modulo.qtd ?? modulo.Qtd) ?? 0;
+}
 
-  const unit = Math.round((custoTotal / totalUnidades) * 100) / 100;
-  let acumulado = 0;
-  ativos.forEach((m, idx) => {
-    const quantidade = toFiniteNumber(m.quantidade) ?? 1;
-    let valorTotal = Math.round(unit * quantidade * 100) / 100;
-    if (idx === ativos.length - 1) {
-      valorTotal = Math.round((custoTotal - acumulado) * 100) / 100;
+function getModuloValorUnitario(modulo: Record<string, unknown>): number {
+  return (
+    toFiniteNumber(
+      modulo.valorUnitario ??
+        modulo.valor_unitario ??
+        modulo.ValorUnitario ??
+        modulo.unitario ??
+        modulo.Unitario,
+    ) ?? 0
+  );
+}
+
+function getModuloValorTotal(modulo: Record<string, unknown>): number {
+  return (
+    toFiniteNumber(
+      modulo.total ??
+        modulo.Total ??
+        modulo.valorTotal ??
+        modulo.valor_total ??
+        modulo.ValorTotal ??
+        modulo.valor ??
+        modulo.value,
+    ) ??
+    getModuloQuantidade(modulo) * getModuloValorUnitario(modulo)
+  );
+}
+
+function buildModuloId(modulo: Record<string, unknown>, index: number): string {
+  const rawId = modulo.codigo ?? modulo.Codigo ?? modulo.id;
+  if (rawId !== undefined && rawId !== null && String(rawId).trim() !== "") return String(rawId);
+  return getModuloNome(modulo, `modulo-${index + 1}`)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || `modulo-${index + 1}`;
+}
+
+function getRawModulosFromLicenciamento(
+  lic: Record<string, unknown>,
+): Record<string, unknown>[] | undefined {
+  const candidates = [
+    lic.modulos,
+    lic.Modulos,
+    lic.modulosAtivos,
+    lic.ModulosAtivos,
+    lic.response,
+    lic.Response,
+    lic.data,
+    lic.Data,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((m): m is Record<string, unknown> => !!m && typeof m === "object");
     }
-    acumulado = Math.round((acumulado + valorTotal) * 100) / 100;
-    const valorUnitario = Math.round((valorTotal / quantidade) * 100) / 100;
-    m.quantidade = quantidade;
-    m.valorUnitario = valorUnitario;
-    m.valor_unitario = valorUnitario;
-    m.valorTotal = valorTotal;
-    m.valor_total = valorTotal;
-    m.valor = valorTotal;
-    m.descricao = `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`;
-  });
+    if (candidate && typeof candidate === "object") {
+      const nested = candidate as Record<string, unknown>;
+      const nestedModulos = nested.modulos ?? nested.Modulos ?? nested.modulosAtivos ?? nested.ModulosAtivos;
+      if (Array.isArray(nestedModulos)) {
+        return nestedModulos.filter((m): m is Record<string, unknown> => !!m && typeof m === "object");
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function mapModuloApiToStorage(modulo: Record<string, unknown>, index: number): Record<string, unknown> {
+  const quantidade = getModuloQuantidade(modulo);
+  const valorUnitario = getModuloValorUnitario(modulo);
+  const valorTotal = getModuloValorTotal(modulo);
+  const ativo = isModuloAtivo(modulo);
+  const nome = getModuloNome(modulo, `Módulo ${index + 1}`);
+
+  return {
+    ...modulo,
+    id: buildModuloId(modulo, index),
+    nome,
+    descricao: buildModuloDescricao(modulo, quantidade, valorUnitario),
+    ativo,
+    quantidade,
+    valorUnitario,
+    valor_unitario: valorUnitario,
+    total: valorTotal,
+    valorTotal: valorTotal,
+    valor_total: valorTotal,
+    valor: valorTotal,
+    status:
+      typeof (modulo.status ?? modulo.Status) === "string"
+        ? String(modulo.status ?? modulo.Status)
+        : ativo
+          ? "Ativo"
+          : "Inativo",
+  };
+}
+
+function getQuantidadeModulo(
+  modulos: Record<string, unknown>[] | undefined,
+  matcher: RegExp,
+): number | undefined {
+  if (!Array.isArray(modulos)) return undefined;
+  for (const modulo of modulos) {
+    if (matcher.test(getModuloNome(modulo, "").toUpperCase())) {
+      return isModuloAtivo(modulo) ? getModuloQuantidade(modulo) : 0;
+    }
+  }
+  return undefined;
+}
+
+function sumModuloTotals(modulos: Record<string, unknown>[]): number {
+  return Math.round(modulos.reduce((acc, modulo) => acc + getModuloValorTotal(modulo), 0) * 100) / 100;
 }
 
 function toModulos(v: unknown): Modulo[] {
@@ -232,16 +292,13 @@ function toModulos(v: unknown): Modulo[] {
   return v
     .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
     .map((m, i) => {
-      const quantidade = toFiniteNumber(m.quantidade ?? m.Quantidade) ?? 1;
-      const valorUnitario =
-        toFiniteNumber(m.valorUnitario ?? m.valor_unitario ?? m.ValorUnitario) ?? 0;
-      const valor =
-        toFiniteNumber(m.valor ?? m.valor_total ?? m.valorTotal ?? m.value) ??
-        quantidade * valorUnitario;
+      const quantidade = getModuloQuantidade(m);
+      const valorUnitario = getModuloValorUnitario(m);
+      const valor = getModuloValorTotal(m);
 
       return {
-        id: String(m.id ?? `m${i}`),
-        nome: String(m.nome ?? m.name ?? "Módulo"),
+        id: String(m.id ?? buildModuloId(m, i)),
+        nome: getModuloNome(m, "Módulo"),
         descricao: buildModuloDescricao(m, quantidade, valorUnitario),
         ativo: isModuloAtivo(m),
         valor,
