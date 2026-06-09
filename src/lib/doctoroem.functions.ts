@@ -540,36 +540,22 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (filiais !== undefined) update.numero_filiais = filiais;
     const usuarios = num(lic.usuarios ?? lic.usuariosAdicionais);
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
-    // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
+    const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(lic);
+    const modulosNorm = modulosExtraidos;
     const qtdPdvApi = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
-    const pdvFallback = isProdutoGestaoLegal(produto) ? 3 : 1;
-    const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
+    const qtdPdvModulo = getQuantidadeModulo(modulosNorm, /PDV/i);
+    const qtdPdv = qtdPdvModulo ?? qtdPdvApi ?? 0;
     update.qtd_pdv = qtdPdv;
-    update.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
+    update.qtd_pdv_comandas = qtdPdv;
     update.bloqueado = bloqueado ?? false;
     update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
     if (motivo) update.motivo_bloqueio = motivo;
-    const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
-      lic,
-      produto,
-      qtdPdv,
-    );
-    const modulosNorm = modulosExtraidos;
     console.log("[OEM forceSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
     if (modulosNorm) update.modulos_ativos = modulosNorm;
-    // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
     const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
     update.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
-    // Custo: zero/indefinido da API NÃO pode vencer o valor calculado.
-    const custoApi = num(lic.custoTotal ?? lic.valorTotal);
-    let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
-    if (!custo || custo <= 0) {
-      custo = isProdutoGestaoLegal(produto)
-        ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
-        : Math.round(qtdPdv * 29.9 * 100) / 100;
-    }
-    update.custo_total = custo;
+    update.custo_total = custoModulos ?? num(lic.custoTotal ?? lic.valorTotal) ?? 0;
     if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
       update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
     }
@@ -591,68 +577,17 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 
 /** Mapeia o payload real de /v1/licenciamento para colunas de clientes_oem. */
 /**
- * Normaliza o array `data.modulos` da TabletCloud (codigo, ativo, quantidade,
- * valorUnitario, valorTotal) e calcula o custo somando o valorTotal dos ativos.
- * Sem o array, aplica a regra temporária: GESTAO LEGAL → R$ 29,90/PDV ou R$ 149,90.
+ * Normaliza o array real de módulos da API, preservando os campos originais e
+ * adicionando aliases usados pela interface.
  */
 function extrairModulosECusto(
   lic: Record<string, unknown>,
-  produto: string | undefined,
-  qtdPdv: number,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
-  const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
+  const rawModulos = getRawModulosFromLicenciamento(lic);
+  if (!rawModulos?.length) return {};
 
-  let modulos: Record<string, unknown>[] | undefined;
-
-  if (Array.isArray(rawModulos) && rawModulos.length > 0) {
-    // Lê dinamicamente os módulos REAIS da API (Mesa/Ficha incluso, se ativo).
-    modulos = rawModulos
-      .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
-      .map((m, i) => {
-        const ativo = isModuloAtivo(m);
-        const quantidade = toFiniteNumber(m.quantidade ?? m.Quantidade) ?? 1;
-        const valorUnitario =
-          toFiniteNumber(m.valorUnitario ?? m.valor_unitario ?? m.ValorUnitario) ?? 0;
-        const valorTotal =
-          toFiniteNumber(m.valorTotal ?? m.valor_total ?? m.ValorTotal ?? m.valor) ??
-          quantidade * valorUnitario;
-        return {
-          id: String(m.codigo ?? m.Codigo ?? m.id ?? `m${i}`),
-          nome: String(m.nome ?? m.Nome ?? m.descricao ?? `Módulo ${m.codigo ?? i + 1}`),
-          descricao: buildModuloDescricao(m, quantidade, valorUnitario),
-          ativo,
-          valor: valorTotal,
-          quantidade,
-          valorUnitario,
-          valor_unitario: valorUnitario,
-          valorTotal,
-          valor_total: valorTotal,
-          status: ativo ? "Ativo" : "Inativo",
-        };
-      });
-  } else if (isProdutoGestaoLegal(produto)) {
-    // API sem array de módulos: monta o ecossistema padrão do GESTAO LEGAL
-    // (Licença PDV escala, Estoque e Mesa/Ficha são ativo/inativo).
-    modulos = modulosPadraoGestaoLegal(qtdPdv);
-  } else {
-    return {};
-  }
-
-  let custo = modulos
-    .filter((m) => isModuloAtivo(m))
-    .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
-
-  // O JSON da TabletCloud vem sem valores em dinheiro: aplica a regra
-  // comercial e distribui o custo contratado entre os módulos ativos
-  // para a soma fechar exatamente o Custo Mensal Total.
-  if ((!custo || custo <= 0) && isProdutoGestaoLegal(produto)) {
-    const custoApi = toFiniteNumber(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
-    const total = custoApi && custoApi > 0 ? custoApi : GESTAO_LEGAL_CUSTO_PADRAO;
-    distribuirCustoEntreModulos(modulos, total);
-    custo = total;
-  }
-
-  return { modulos, custo: Math.round(custo * 100) / 100 };
+  const modulos = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
+  return { modulos, custo: sumModuloTotals(modulos) };
 }
 
 /**
@@ -663,17 +598,9 @@ function calcularComandas(
   qtdComandasApi: number | undefined,
   modulos: Record<string, unknown>[] | undefined,
 ): number {
-  if (qtdComandasApi !== undefined && qtdComandasApi > 0) return Math.min(qtdComandasApi, 1);
-  if (Array.isArray(modulos)) {
-    const mesaAtiva = modulos.some(
-      (m) =>
-        isModuloAtivo(m) &&
-        /MESA|COMANDA|FICHA/i.test(String(m.nome ?? "")),
-    );
-    if (mesaAtiva) return 1;
-    return 0;
-  }
-  return 0;
+  const qtdMesaFicha = getQuantidadeModulo(modulos, /MESA|FICHA/i);
+  if (qtdMesaFicha !== undefined) return qtdMesaFicha;
+  return qtdComandasApi ?? 0;
 }
 
 function mapLicenciamentoToRow(
@@ -727,34 +654,20 @@ function mapLicenciamentoToRow(
   if (filiais !== undefined) row.numero_filiais = filiais;
   const usuarios = num(lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
-  // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
   const qtdPdvApi = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
-  const pdvFallback = isProdutoGestaoLegal(produto) ? 3 : 1;
-  const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
+  const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(lic);
+  const modulosNorm = modulosExtraidos;
+  const qtdPdvModulo = getQuantidadeModulo(modulosNorm, /PDV/i);
+  const qtdPdv = qtdPdvModulo ?? qtdPdvApi ?? 0;
   row.qtd_pdv = qtdPdv;
-  row.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
+  row.qtd_pdv_comandas = qtdPdv;
   const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
-  const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
-    lic,
-    produto,
-    qtdPdv,
-  );
-  const modulosNorm = modulosExtraidos;
   console.log("[OEM bulkSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
   if (modulosNorm) row.modulos_ativos = modulosNorm;
-  // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
   const qtdComandasApi = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
   row.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
-  // Custo: zero/indefinido da API NÃO pode vencer o valor calculado.
-  const custoApi = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
-  let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
-  if (!custo || custo <= 0) {
-    custo = isProdutoGestaoLegal(produto)
-      ? Math.max(149.9, Math.round(qtdPdv * 29.9 * 100) / 100)
-      : Math.round(qtdPdv * 29.9 * 100) / 100;
-  }
-  row.custo_total = custo;
+  row.custo_total = custoModulos ?? num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ?? 0;
   if (Array.isArray(lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe)) {
     row.licencas_detalhe = lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe;
   }
