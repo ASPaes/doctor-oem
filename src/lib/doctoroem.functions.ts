@@ -582,9 +582,6 @@ function mapLicenciamentoToRow(
   const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
   const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
   row.qtd_pdv = qtdPdv;
-  const qtdComandasApi =
-    num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas) ?? pdvComandas;
-  row.qtd_comandas = qtdComandasApi && qtdComandasApi > 0 ? qtdComandasApi : qtdPdv;
   row.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
   const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
@@ -594,6 +591,9 @@ function mapLicenciamentoToRow(
     qtdPdv,
   );
   if (modulosNorm) row.modulos_ativos = modulosNorm;
+  // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
+  const qtdComandasApi = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
+  row.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
   // Custo: zero/indefinido da API NÃO pode vencer o valor calculado.
   const custoApi = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
   let custo = custoApi && custoApi > 0 ? custoApi : custoModulos;
