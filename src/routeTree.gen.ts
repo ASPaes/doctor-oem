@@ -9,10 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as UsuariosRouteImport } from './routes/usuarios'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClientesIndexRouteImport } from './routes/clientes.index'
 import { Route as ClientesIdRouteImport } from './routes/clientes.$id'
 
+const UsuariosRoute = UsuariosRouteImport.update({
+  id: '/usuarios',
+  path: '/usuarios',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -31,36 +37,47 @@ const ClientesIdRoute = ClientesIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes/': typeof ClientesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes': typeof ClientesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/usuarios': typeof UsuariosRoute
   '/clientes/$id': typeof ClientesIdRoute
   '/clientes/': typeof ClientesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/clientes/$id' | '/clientes/'
+  fullPaths: '/' | '/usuarios' | '/clientes/$id' | '/clientes/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/clientes/$id' | '/clientes'
-  id: '__root__' | '/' | '/clientes/$id' | '/clientes/'
+  to: '/' | '/usuarios' | '/clientes/$id' | '/clientes'
+  id: '__root__' | '/' | '/usuarios' | '/clientes/$id' | '/clientes/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  UsuariosRoute: typeof UsuariosRoute
   ClientesIdRoute: typeof ClientesIdRoute
   ClientesIndexRoute: typeof ClientesIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/usuarios': {
+      id: '/usuarios'
+      path: '/usuarios'
+      fullPath: '/usuarios'
+      preLoaderRoute: typeof UsuariosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  UsuariosRoute: UsuariosRoute,
   ClientesIdRoute: ClientesIdRoute,
   ClientesIndexRoute: ClientesIndexRoute,
 }
