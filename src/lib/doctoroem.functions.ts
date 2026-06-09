@@ -508,20 +508,25 @@ function mapLicenciamentoToRow(
   if (produto) row.produto_principal = produto;
   const filiais = num(lic.numeroFiliais ?? lic.NumeroFiliais ?? lic.qtdFiliais ?? lic.QtdFiliais);
   if (filiais !== undefined) row.numero_filiais = filiais;
-  const usuarios = num(lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
+  const usuarios = num(lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
-  const qtdPdv = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs);
+  const qtdPdv = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
   if (qtdPdv !== undefined) row.qtd_pdv = qtdPdv;
-  const qtdComandas = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
+  const qtdComandas =
+    num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas) ?? pdvComandas;
   if (qtdComandas !== undefined) row.qtd_comandas = qtdComandas;
   if (pdvComandas !== undefined) row.qtd_pdv_comandas = pdvComandas;
   const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
-  const custo = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
+  const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+    lic,
+    produto,
+    qtdPdv,
+  );
+  if (modulosNorm) row.modulos_ativos = modulosNorm;
+  const custo =
+    num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ?? custoModulos;
   if (custo !== undefined) row.custo_total = custo;
-  if (Array.isArray(lic.modulosAtivos ?? lic.ModulosAtivos ?? lic.modulos ?? lic.Modulos)) {
-    row.modulos_ativos = lic.modulosAtivos ?? lic.ModulosAtivos ?? lic.modulos ?? lic.Modulos;
-  }
   if (Array.isArray(lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe)) {
     row.licencas_detalhe = lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe;
   }
