@@ -62,7 +62,6 @@
 }
 
 :root {
-:root {
   --radius: 0.75rem;
   /* Futuristic dark hub palette */
   --background: oklch(0.16 0.03 265);
@@ -130,7 +129,6 @@
 @utility glass-panel {
   background: var(--gradient-surface);
   backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid var(--color-border);
 }
 
