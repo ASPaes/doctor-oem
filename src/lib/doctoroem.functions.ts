@@ -542,15 +542,15 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 function extrairModulosECusto(
   lic: Record<string, unknown>,
   produto: string | undefined,
+  qtdPdv: number,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
   const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
 
-  if (isProdutoGestaoLegal(produto)) {
-    return { modulos: buildGestaoLegalModulos(), custo: 149.9 };
-  }
+  let modulos: Record<string, unknown>[] | undefined;
 
   if (Array.isArray(rawModulos) && rawModulos.length > 0) {
-    const modulos = rawModulos
+    // Lê dinamicamente os módulos REAIS da API (Mesa/Ficha incluso, se ativo).
+    modulos = rawModulos
       .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
       .map((m, i) => {
         const ativo = isModuloAtivo(m);
@@ -568,17 +568,35 @@ function extrairModulosECusto(
           valor: valorTotal,
           quantidade,
           valorUnitario,
+          valor_unitario: valorUnitario,
           valorTotal,
+          valor_total: valorTotal,
           status: ativo ? "Ativo" : "Inativo",
         };
       });
-    const custo = modulos
-      .filter((m) => m.ativo)
-      .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
-    return { modulos, custo: Math.round(custo * 100) / 100 };
+  } else if (isProdutoGestaoLegal(produto)) {
+    // API sem array de módulos: monta o ecossistema padrão do GESTAO LEGAL
+    // (Licença PDV escala, Estoque e Mesa/Ficha são ativo/inativo).
+    modulos = modulosPadraoGestaoLegal(qtdPdv);
+  } else {
+    return {};
   }
 
-  return {};
+  let custo = modulos
+    .filter((m) => isModuloAtivo(m))
+    .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
+
+  // O JSON da TabletCloud vem sem valores em dinheiro: aplica a regra
+  // comercial e distribui o custo contratado entre os módulos ativos
+  // para a soma fechar exatamente o Custo Mensal Total.
+  if ((!custo || custo <= 0) && isProdutoGestaoLegal(produto)) {
+    const custoApi = toFiniteNumber(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
+    const total = custoApi && custoApi > 0 ? custoApi : GESTAO_LEGAL_CUSTO_PADRAO;
+    distribuirCustoEntreModulos(modulos, total);
+    custo = total;
+  }
+
+  return { modulos, custo: Math.round(custo * 100) / 100 };
 }
 
 /**
