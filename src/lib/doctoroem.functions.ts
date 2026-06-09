@@ -247,42 +247,60 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
       .replace(/\{[^}]*\}\/?$/g, "")
       .replace(/\/+$/g, "");
 
-    const url = new URL(`${apiUrl}/oem/configuracoes`);
-    url.searchParams.set("cnpj_cpf", cnpjDigits);
-    url.searchParams.set("client_id", clientId);
-    url.searchParams.set("client_secret", clientSecret);
+    // Tenta múltiplas variações de rota do ecossistema Fiweb até encontrar uma que responda.
+    const candidatePaths = [
+      "/oem/licenciamentos",
+      "/oem/licenciamento",
+      "/oem/clientes",
+      "/oem/configuracoes",
+    ];
 
-    console.log("[OEM forceSync] disparo:", {
-      url: redactSensitiveUrl(url.toString().replace(clientSecret, "***")),
-      method: "GET",
-      cnpj_cpf: cnpjDigits,
-    });
+    let payload: Record<string, unknown> | null = null;
+    let lastError: { status: number; safeUrl: string; preview: string } | null = null;
 
-    const resp = await fetch(url.toString(), {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "X-Client-Id": clientId,
-        "X-Client-Secret": clientSecret,
-      },
-    });
+    for (const path of candidatePaths) {
+      const url = new URL(`${apiUrl}${path}`);
+      url.searchParams.set("cnpj_cpf", cnpjDigits);
+      url.searchParams.set("client_id", clientId);
+      url.searchParams.set("client_secret", clientSecret);
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
       const safeUrl = redactSensitiveUrl(url.toString()).replace(clientSecret, "***");
-      console.error("[OEM forceSync] falha:", {
-        url: safeUrl,
+      console.log("[OEM forceSync] tentativa:", { url: safeUrl, method: "GET", cnpj_cpf: cnpjDigits });
+
+      const resp = await fetch(url.toString(), {
         method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-Client-Id": clientId,
+          "X-Client-Secret": clientSecret,
+        },
+      });
+
+      if (resp.ok) {
+        payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+        console.log("[OEM forceSync] sucesso na rota:", path);
+        break;
+      }
+
+      const text = await resp.text().catch(() => "");
+      lastError = { status: resp.status, safeUrl, preview: text.slice(0, 200) };
+      console.warn("[OEM forceSync] rota falhou:", {
+        path,
         status: resp.status,
         statusText: resp.statusText,
-        responsePreview: text.slice(0, 500),
+        responsePreview: text.slice(0, 300),
       });
-      throw new Error(
-        `OEM API ${resp.status} em GET ${safeUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
-      );
+
+      // Se não for 404, interrompe (provavelmente auth/permissão e demais rotas vão falhar igual)
+      if (resp.status !== 404) break;
     }
 
-    const payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!payload) {
+      const err = lastError ?? { status: 0, safeUrl: apiUrl, preview: "(sem resposta)" };
+      throw new Error(
+        `OEM API ${err.status} em GET ${err.safeUrl} — ${err.preview || "(corpo vazio)"}`,
+      );
+    }
 
     // 3) Faz upsert/update apenas das colunas permitidas que vieram no payload.
     const allowed = [
