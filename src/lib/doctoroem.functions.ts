@@ -278,7 +278,11 @@ export const listWebhookLogs = createServerFn({ method: "GET" })
     const { data: rows, error } = await query;
     if (error) throw new Error(`DoctorOEM listWebhookLogs: ${error.message}`);
     return (rows ?? []).map((r) => {
-      const gw = r.developer_gateways as { webhook_url: string | null } | null;
+      const rel = r.developer_gateways as
+        | { webhook_url: string | null }
+        | { webhook_url: string | null }[]
+        | null;
+      const gw = Array.isArray(rel) ? rel[0] : rel;
       const url = gw?.webhook_url ?? "";
       let host = url;
       try {
