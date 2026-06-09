@@ -376,22 +376,25 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (produto) update.produto_principal = produto;
     const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
     if (filiais !== undefined) update.numero_filiais = filiais;
-    const usuarios = num(lic.usuariosAdicionais);
+    const usuarios = num(lic.usuarios ?? lic.usuariosAdicionais);
     if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
-    const qtdPdv = num(lic.qtdPdv ?? lic.pdvs);
+    const qtdPdv = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
     if (qtdPdv !== undefined) update.qtd_pdv = qtdPdv;
-    const qtdComandas = num(lic.qtdComandas ?? lic.comandas);
+    const qtdComandas = num(lic.qtdComandas ?? lic.comandas) ?? pdvComandas;
     if (qtdComandas !== undefined) update.qtd_comandas = qtdComandas;
     if (pdvComandas !== undefined) update.qtd_pdv_comandas = pdvComandas;
     update.bloqueado = bloqueado ?? false;
     update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
     if (motivo) update.motivo_bloqueio = motivo;
-    const custo = num(lic.custoTotal ?? lic.valorTotal);
+    const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+      lic,
+      produto,
+      qtdPdv,
+    );
+    if (modulosNorm) update.modulos_ativos = modulosNorm;
+    const custo = num(lic.custoTotal ?? lic.valorTotal) ?? custoModulos;
     if (custo !== undefined) update.custo_total = custo;
-    if (Array.isArray(lic.modulosAtivos ?? lic.modulos)) {
-      update.modulos_ativos = lic.modulosAtivos ?? lic.modulos;
-    }
     if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
       update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
     }
@@ -412,6 +415,54 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 // ============================================================
 
 /** Mapeia o payload real de /v1/licenciamento para colunas de clientes_oem. */
+/**
+ * Normaliza o array `data.modulos` da TabletCloud (codigo, ativo, quantidade,
+ * valorUnitario, valorTotal) e calcula o custo somando o valorTotal dos ativos.
+ * Sem o array, aplica a regra temporária: GESTAO LEGAL → R$ 29,90/PDV ou R$ 149,90.
+ */
+function extrairModulosECusto(
+  lic: Record<string, unknown>,
+  produto: string | undefined,
+  pdvs: number | undefined,
+): { modulos?: Record<string, unknown>[]; custo?: number } {
+  const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
+
+  if (Array.isArray(rawModulos) && rawModulos.length > 0) {
+    const modulos = rawModulos
+      .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
+      .map((m, i) => {
+        const ativoRaw = m.ativo ?? m.Ativo;
+        const ativo =
+          ativoRaw == null ? true : ativoRaw === true || ativoRaw === "true" || ativoRaw === 1;
+        const quantidade = Number(m.quantidade ?? m.Quantidade ?? 1) || 1;
+        const valorUnitario = Number(m.valorUnitario ?? m.ValorUnitario ?? 0) || 0;
+        const valorTotal =
+          Number(m.valorTotal ?? m.ValorTotal ?? 0) || quantidade * valorUnitario;
+        return {
+          id: String(m.codigo ?? m.Codigo ?? m.id ?? `m${i}`),
+          nome: String(m.nome ?? m.Nome ?? m.descricao ?? `Módulo ${m.codigo ?? i + 1}`),
+          descricao: `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`,
+          ativo,
+          valor: valorTotal,
+          quantidade,
+          valorUnitario,
+        };
+      });
+    const custo = modulos
+      .filter((m) => m.ativo)
+      .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
+    return { modulos, custo: Math.round(custo * 100) / 100 };
+  }
+
+  // Regra de negócios temporária enquanto o GET não retorna `modulos`.
+  if ((produto ?? "").toUpperCase().includes("GESTAO LEGAL")) {
+    const custo = pdvs && pdvs > 0 ? Math.round(pdvs * 29.9 * 100) / 100 : 149.9;
+    return { custo };
+  }
+
+  return {};
+}
+
 function mapLicenciamentoToRow(
   lic: Record<string, unknown>,
   codEmpresa: number,
@@ -461,20 +512,25 @@ function mapLicenciamentoToRow(
   if (produto) row.produto_principal = produto;
   const filiais = num(lic.numeroFiliais ?? lic.NumeroFiliais ?? lic.qtdFiliais ?? lic.QtdFiliais);
   if (filiais !== undefined) row.numero_filiais = filiais;
-  const usuarios = num(lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
+  const usuarios = num(lic.usuarios ?? lic.Usuarios ?? lic.usuariosAdicionais ?? lic.UsuariosAdicionais);
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
-  const qtdPdv = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs);
+  const qtdPdv = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
   if (qtdPdv !== undefined) row.qtd_pdv = qtdPdv;
-  const qtdComandas = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
+  const qtdComandas =
+    num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas) ?? pdvComandas;
   if (qtdComandas !== undefined) row.qtd_comandas = qtdComandas;
   if (pdvComandas !== undefined) row.qtd_pdv_comandas = pdvComandas;
   const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
-  const custo = num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal);
+  const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+    lic,
+    produto,
+    qtdPdv,
+  );
+  if (modulosNorm) row.modulos_ativos = modulosNorm;
+  const custo =
+    num(lic.custoTotal ?? lic.CustoTotal ?? lic.valorTotal ?? lic.ValorTotal) ?? custoModulos;
   if (custo !== undefined) row.custo_total = custo;
-  if (Array.isArray(lic.modulosAtivos ?? lic.ModulosAtivos ?? lic.modulos ?? lic.Modulos)) {
-    row.modulos_ativos = lic.modulosAtivos ?? lic.ModulosAtivos ?? lic.modulos ?? lic.Modulos;
-  }
   if (Array.isArray(lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe)) {
     row.licencas_detalhe = lic.licencas ?? lic.Licencas ?? lic.licencasDetalhe ?? lic.LicencasDetalhe;
   }
