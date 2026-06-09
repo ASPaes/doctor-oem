@@ -227,118 +227,62 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     if (curErr) throw new Error(`DoctorOEM forceSync (load): ${curErr.message}`);
     if (!current) return null;
 
-    // 2) Chama a API real do Software OEM (TabletCloud).
-    const rawBase = process.env.OEM_API_BASE_URL;
+    // 2) Chama a API real do Software OEM (PDVLegal/Fiweb) via GET.
+    const FALLBACK_BASE = "https://api.pdvlegal.com.br/api";
+    const rawBase = (process.env.OEM_API_BASE_URL ?? FALLBACK_BASE).trim();
     const clientId = process.env.OEM_CLIENT_ID;
     const clientSecret = process.env.OEM_CLIENT_SECRET;
-    const username = process.env.OEM_API_USERNAME;
-    const password = process.env.OEM_API_PASSWORD;
-    if (!rawBase || !clientId || !clientSecret) {
+    if (!clientId || !clientSecret) {
       throw new Error(
-        "OEM API: variáveis OEM_API_BASE_URL, OEM_CLIENT_ID e/ou OEM_CLIENT_SECRET ausentes nos secrets.",
-      );
-    }
-    if (!username || !password) {
-      throw new Error(
-        "OEM API: faltam OEM_API_USERNAME e OEM_API_PASSWORD. A TabletCloud documenta autenticação via /token antes das rotas de licenciamento.",
+        "OEM API: variáveis OEM_CLIENT_ID e/ou OEM_CLIENT_SECRET ausentes nos secrets.",
       );
     }
 
     const currentRow = current as ClienteRow;
     const cnpj = currentRow.cnpj_cpf;
-    const apiOrigin = getTabletCloudOrigin(rawBase);
-    const tokenUrl = `${apiOrigin}/token`;
-    const licenciamentoUrl = `${apiOrigin}/licenciamento/minhaslicencas/1/${encodeURIComponent(cnpj)}`;
+    const cnpjDigits = normalizeDigits(cnpj);
 
-    console.log("[OEM forceSync] token:", {
-      url: tokenUrl,
-      method: "POST",
-      authMode: "tabletcloud-token",
-      bodyKeys: ["username", "password", "grant_type", "client_id", "client_secret"],
+    // Normaliza a base: remove barras finais e qualquer placeholder colado por engano.
+    const apiUrl = rawBase
+      .replace(/\{[^}]*\}\/?$/g, "")
+      .replace(/\/+$/g, "");
+
+    const url = new URL(`${apiUrl}/oem/configuracoes`);
+    url.searchParams.set("cnpj_cpf", cnpjDigits);
+    url.searchParams.set("client_id", clientId);
+    url.searchParams.set("client_secret", clientSecret);
+
+    console.log("[OEM forceSync] disparo:", {
+      url: redactSensitiveUrl(url.toString().replace(clientSecret, "***")),
+      method: "GET",
+      cnpj_cpf: cnpjDigits,
     });
 
-    const tokenResp = await fetch(tokenUrl, {
-      method: "POST",
+    const resp = await fetch(url.toString(), {
+      method: "GET",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
+        "X-Client-Id": clientId,
+        "X-Client-Secret": clientSecret,
       },
-      body: new URLSearchParams({
-        username,
-        password,
-        grant_type: "password",
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
-    });
-
-    if (!tokenResp.ok) {
-      const text = await tokenResp.text().catch(() => "");
-      console.error("[OEM forceSync] falha token:", {
-        url: tokenUrl,
-        method: "POST",
-        status: tokenResp.status,
-        statusText: tokenResp.statusText,
-        responsePreview: text.slice(0, 500),
-      });
-      throw new Error(
-        `OEM API ${tokenResp.status} em POST ${tokenUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
-      );
-    }
-
-    const tokenPayload = (await tokenResp.json().catch(() => ({}))) as {
-      access_token?: string;
-      token_type?: string;
-      error?: string;
-      error_description?: string;
-    };
-    const accessToken = tokenPayload.access_token;
-
-    if (!accessToken) {
-      throw new Error(
-        `OEM API token inválido — ${tokenPayload.error_description ?? tokenPayload.error ?? "access_token ausente"}`,
-      );
-    }
-
-    const licenciamentoUrlWithToken = `${licenciamentoUrl}?token=${encodeURIComponent(accessToken)}`;
-
-    console.log("[OEM forceSync] licenciamento:", {
-      url: redactSensitiveUrl(licenciamentoUrlWithToken),
-      method: "GET",
-      cnpj_cpf: cnpj,
-    });
-
-    const resp = await fetch(licenciamentoUrlWithToken, {
-      method: "GET",
-      headers: { Accept: "application/json" },
     });
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      console.error("[OEM forceSync] falha licenciamento:", {
-        url: redactSensitiveUrl(licenciamentoUrlWithToken),
+      const safeUrl = redactSensitiveUrl(url.toString()).replace(clientSecret, "***");
+      console.error("[OEM forceSync] falha:", {
+        url: safeUrl,
         method: "GET",
         status: resp.status,
         statusText: resp.statusText,
         responsePreview: text.slice(0, 500),
       });
       throw new Error(
-        `OEM API ${resp.status} em GET ${redactSensitiveUrl(licenciamentoUrlWithToken)} — ${text.slice(0, 200) || "(corpo vazio)"}`,
+        `OEM API ${resp.status} em GET ${safeUrl} — ${text.slice(0, 200) || "(corpo vazio)"}`,
       );
     }
 
-    const licenciamentoPayload =
-      (await resp.json().catch(() => ({}))) as TabletCloudLicenciamentoResponse;
-    const licencas = Array.isArray(licenciamentoPayload.data) ? licenciamentoPayload.data : [];
-    const match = findTabletCloudLicenca(licencas, cnpj);
-
-    if (!match) {
-      throw new Error(
-        `OEM API não retornou licenciamento para o CNPJ/CPF ${cnpj} em GET ${redactSensitiveUrl(licenciamentoUrlWithToken)}.`,
-      );
-    }
-
-    const payload = mapTabletCloudLicencaToUpdate(currentRow, match.item, match.filial);
+    const payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
 
     // 3) Faz upsert/update apenas das colunas permitidas que vieram no payload.
     const allowed = [
