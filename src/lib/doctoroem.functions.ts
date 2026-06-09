@@ -247,45 +247,52 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
       .replace(/\{[^}]*\}\/?$/g, "")
       .replace(/\/+$/g, "");
 
-    // Tenta múltiplas variações de rota do ecossistema Fiweb até encontrar uma que responda.
-    const candidatePaths = [
-      "/oem/licenciamentos",
-      "/oem/licenciamento",
-      "/oem/clientes",
-      "/oem/configuracoes",
+    // Tentativas com chaves estritamente no header (sem misturar na query principal).
+    type Attempt = { path: string; query?: Record<string, string>; extraHeaders?: Record<string, string> };
+    const attempts: Attempt[] = [
+      { path: "/oem/empresas", query: { cnpj_cpf: cnpjDigits } },
+      { path: "/oem/empresa", query: { cnpj_cpf: cnpjDigits } },
+      { path: "/oem/licenciamentos", extraHeaders: { "X-CNPJ": cnpjDigits, cnpj_cpf: cnpjDigits } },
     ];
+
+    const baseHeaders: Record<string, string> = {
+      Accept: "application/json",
+      client_id: clientId,
+      client_secret: clientSecret,
+    };
 
     let payload: Record<string, unknown> | null = null;
     let lastError: { status: number; safeUrl: string; preview: string } | null = null;
 
-    for (const path of candidatePaths) {
-      const url = new URL(`${apiUrl}${path}`);
-      url.searchParams.set("cnpj_cpf", cnpjDigits);
-      url.searchParams.set("client_id", clientId);
-      url.searchParams.set("client_secret", clientSecret);
+    for (const attempt of attempts) {
+      const url = new URL(`${apiUrl}${attempt.path}`);
+      if (attempt.query) {
+        for (const [k, v] of Object.entries(attempt.query)) url.searchParams.set(k, v);
+      }
 
-      const safeUrl = redactSensitiveUrl(url.toString()).replace(clientSecret, "***");
-      console.log("[OEM forceSync] tentativa:", { url: safeUrl, method: "GET", cnpj_cpf: cnpjDigits });
+      const safeUrl = redactSensitiveUrl(url.toString());
+      console.log("[OEM forceSync] tentativa:", {
+        url: safeUrl,
+        method: "GET",
+        cnpj_cpf: cnpjDigits,
+        extraHeaders: attempt.extraHeaders ? Object.keys(attempt.extraHeaders) : [],
+      });
 
       const resp = await fetch(url.toString(), {
         method: "GET",
-        headers: {
-          Accept: "application/json",
-          "X-Client-Id": clientId,
-          "X-Client-Secret": clientSecret,
-        },
+        headers: { ...baseHeaders, ...(attempt.extraHeaders ?? {}) },
       });
 
       if (resp.ok) {
         payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-        console.log("[OEM forceSync] sucesso na rota:", path);
+        console.log("[OEM forceSync] sucesso na rota:", attempt.path);
         break;
       }
 
       const text = await resp.text().catch(() => "");
       lastError = { status: resp.status, safeUrl, preview: text.slice(0, 200) };
       console.warn("[OEM forceSync] rota falhou:", {
-        path,
+        path: attempt.path,
         status: resp.status,
         statusText: resp.statusText,
         responsePreview: text.slice(0, 300),
