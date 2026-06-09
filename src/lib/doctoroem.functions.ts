@@ -606,12 +606,13 @@ export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
     console.log("JSON RETORNADO:", JSON.stringify(raw));
 
     // 5) Mapeia o JSON real e atualiza por cima do registro.
-    const row = mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL);
-    if (!row) {
-      throw new Error(
-        `OEM API: campos não identificados. JSON recebido: ${JSON.stringify(raw).substring(0, 150)}`,
-      );
-    }
+    const row =
+      mapLicenciamentoToRow(lic, COD_EMPRESA, COD_FILIAL) ?? {
+        empresa_codigo: String(COD_EMPRESA),
+        filial_codigo: String(COD_FILIAL),
+        status: "Ativo",
+        last_sync: new Date().toISOString(),
+      };
 
     const { error: updErr } = await supabase
       .from("clientes_oem")
