@@ -497,67 +497,37 @@ function extrairModulosECusto(
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
   const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
 
+  if (isProdutoGestaoLegal(produto)) {
+    return { modulos: buildGestaoLegalModulos(), custo: 149.9 };
+  }
+
   if (Array.isArray(rawModulos) && rawModulos.length > 0) {
     const modulos = rawModulos
       .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
       .map((m, i) => {
-        const ativoRaw = m.ativo ?? m.Ativo;
-        const ativo =
-          ativoRaw == null ? true : ativoRaw === true || ativoRaw === "true" || ativoRaw === 1;
-        const quantidade = Number(m.quantidade ?? m.Quantidade ?? 1) || 1;
-        const valorUnitario = Number(m.valorUnitario ?? m.ValorUnitario ?? 0) || 0;
+        const ativo = isModuloAtivo(m);
+        const quantidade = toFiniteNumber(m.quantidade ?? m.Quantidade) ?? 1;
+        const valorUnitario =
+          toFiniteNumber(m.valorUnitario ?? m.valor_unitario ?? m.ValorUnitario) ?? 0;
         const valorTotal =
-          Number(m.valorTotal ?? m.ValorTotal ?? 0) || quantidade * valorUnitario;
+          toFiniteNumber(m.valorTotal ?? m.valor_total ?? m.ValorTotal ?? m.valor) ??
+          quantidade * valorUnitario;
         return {
           id: String(m.codigo ?? m.Codigo ?? m.id ?? `m${i}`),
           nome: String(m.nome ?? m.Nome ?? m.descricao ?? `Módulo ${m.codigo ?? i + 1}`),
-          descricao: `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`,
+          descricao: buildModuloDescricao(m, quantidade, valorUnitario),
           ativo,
           valor: valorTotal,
           quantidade,
           valorUnitario,
-          valor_unitario: valorUnitario,
           valorTotal,
-          valor_total: valorTotal,
+          status: ativo ? "Ativo" : "Inativo",
         };
       });
     const custo = modulos
       .filter((m) => m.ativo)
       .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
     return { modulos, custo: Math.round(custo * 100) / 100 };
-  }
-
-  // Regra de negócios real para GESTAO LEGAL enquanto o GET não retorna `modulos`:
-  // Licença PDV escala em quantidade (3 × R$ 33,33 = R$ 100,00) e Estoque é módulo
-  // único (1 × R$ 49,90). Total: R$ 149,90.
-  if ((produto ?? "").toUpperCase().includes("GESTAO LEGAL")) {
-    const modulos: Record<string, unknown>[] = [
-      {
-        id: "licenca-pdv",
-        nome: "Licença PDV",
-        descricao: "Qtde 3 × R$ 33,33 (unitário)",
-        ativo: true,
-        valor: 100.0,
-        quantidade: 3,
-        valorUnitario: 33.33,
-        valor_unitario: 33.33,
-        valorTotal: 100.0,
-        valor_total: 100.0,
-      },
-      {
-        id: "estoque",
-        nome: "Estoque",
-        descricao: "Qtde 1 × R$ 49,90 (unitário)",
-        ativo: true,
-        valor: 49.9,
-        quantidade: 1,
-        valorUnitario: 49.9,
-        valor_unitario: 49.9,
-        valorTotal: 49.9,
-        valor_total: 49.9,
-      },
-    ];
-    return { modulos, custo: 149.9 };
   }
 
   return {};
@@ -575,14 +545,13 @@ function calcularComandas(
   if (Array.isArray(modulos)) {
     const mesaAtiva = modulos.some(
       (m) =>
-        Boolean(m.ativo) &&
+        isModuloAtivo(m) &&
         /MESA|COMANDA|FICHA/i.test(String(m.nome ?? "")),
     );
     if (mesaAtiva) return 1;
-    // Padrão: 1 se houver qualquer módulo ativo (licença em operação), senão 0.
-    return modulos.some((m) => Boolean(m.ativo)) ? 1 : 0;
+    return 0;
   }
-  return 1;
+  return 0;
 }
 
 function mapLicenciamentoToRow(
