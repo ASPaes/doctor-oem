@@ -412,6 +412,53 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 // ============================================================
 
 /** Mapeia o payload real de /v1/licenciamento para colunas de clientes_oem. */
+/**
+ * Normaliza o array `data.modulos` da TabletCloud (codigo, ativo, quantidade,
+ * valorUnitario, valorTotal) e calcula o custo somando o valorTotal dos ativos.
+ * Sem o array, aplica a regra temporária: GESTAO LEGAL → R$ 29,90/PDV ou R$ 149,90.
+ */
+function extrairModulosECusto(
+  lic: Record<string, unknown>,
+  produto: string | undefined,
+  pdvs: number | undefined,
+): { modulos?: Record<string, unknown>[]; custo?: number } {
+  const rawModulos = lic.modulos ?? lic.Modulos ?? lic.modulosAtivos ?? lic.ModulosAtivos;
+
+  if (Array.isArray(rawModulos) && rawModulos.length > 0) {
+    const modulos = rawModulos
+      .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
+      .map((m, i) => {
+        const ativo =
+          m.ativo === true || m.ativo === "true" || m.ativo === 1 || m.Ativo === true;
+        const quantidade = Number(m.quantidade ?? m.Quantidade ?? 1) || 1;
+        const valorUnitario = Number(m.valorUnitario ?? m.ValorUnitario ?? 0) || 0;
+        const valorTotal =
+          Number(m.valorTotal ?? m.ValorTotal ?? 0) || quantidade * valorUnitario;
+        return {
+          id: String(m.codigo ?? m.Codigo ?? m.id ?? `m${i}`),
+          nome: String(m.nome ?? m.Nome ?? m.descricao ?? `Módulo ${m.codigo ?? i + 1}`),
+          descricao: `Qtde ${quantidade} × R$ ${valorUnitario.toFixed(2)} (unitário)`,
+          ativo,
+          valor: valorTotal,
+          quantidade,
+          valorUnitario,
+        };
+      });
+    const custo = modulos
+      .filter((m) => m.ativo)
+      .reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
+    return { modulos, custo: Math.round(custo * 100) / 100 };
+  }
+
+  // Regra de negócios temporária enquanto o GET não retorna `modulos`.
+  if ((produto ?? "").toUpperCase().includes("GESTAO LEGAL")) {
+    const custo = pdvs && pdvs > 0 ? Math.round(pdvs * 29.9 * 100) / 100 : 149.9;
+    return { custo };
+  }
+
+  return {};
+}
+
 function mapLicenciamentoToRow(
   lic: Record<string, unknown>,
   codEmpresa: number,
