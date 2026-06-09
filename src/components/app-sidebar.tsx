@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Users, Building2, Plug, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Users, Building2, Plug, ShieldCheck, Settings } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -19,6 +19,7 @@ const items = [
   { title: "Clientes", url: "/clientes", icon: Building2, key: "dash" as const },
   { title: "Usuários & Acesso", url: "/usuarios", icon: Users, key: "users" as const },
   { title: "Gateway de API", url: "/gateway", icon: Plug, key: "gateway" as const },
+  { title: "Configurações", url: "/configuracoes", icon: Settings, key: "dash" as const },
 ];
 
 export function AppSidebar() {

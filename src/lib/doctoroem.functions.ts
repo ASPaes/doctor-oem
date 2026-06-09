@@ -699,7 +699,7 @@ function calcularComandas(
   return qtdComandasApi ?? 0;
 }
 
-function mapLicenciamentoToRow(
+export function mapLicenciamentoToRow(
   lic: Record<string, unknown>,
   codEmpresa: number,
   codFilial: number,
@@ -787,7 +787,7 @@ const OEM_OFFSET_FILIAL_PADRAO = 6633;
 const OEM_DELTAS_FILIAL = [0, 1, -1, 2, -2];
 
 /** Autentica via OAuth2 (password grant) e retorna o access_token. */
-async function obterTokenOem(escopo: string): Promise<string> {
+export async function obterTokenOem(escopo: string): Promise<string> {
   const clientId = process.env.OEM_CLIENT_ID;
   const clientSecret = process.env.OEM_CLIENT_SECRET;
   const username = process.env.OEM_API_USERNAME;
@@ -839,7 +839,7 @@ async function obterTokenOem(escopo: string): Promise<string> {
  * GET /v1/licenciamento/{emp}/{fil}. Retorna o payload "desembrulhado" quando a
  * licença existe, ou null em 404/erros de cliente (empresa/filial inexistente).
  */
-async function fetchLicenciamentoOem(
+export async function fetchLicenciamentoOem(
   accessToken: string,
   codEmpresa: number,
   codFilial: number,
