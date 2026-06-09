@@ -545,7 +545,8 @@ function mapLicenciamentoToRow(
   if (usuarios !== undefined) row.usuarios_adicionais = usuarios;
   // PDVs: se a API mandar 0/indefinido, aplica o fallback de pelo menos 1 PDV ativo.
   const qtdPdvApi = num(lic.qtdPdv ?? lic.QtdPdv ?? lic.pdvs ?? lic.Pdvs) ?? pdvComandas;
-  const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : 1;
+  const pdvFallback = (produto ?? "").toUpperCase().includes("GESTAO LEGAL") ? 3 : 1;
+  const qtdPdv = qtdPdvApi && qtdPdvApi > 0 ? qtdPdvApi : pdvFallback;
   row.qtd_pdv = qtdPdv;
   const qtdComandasApi =
     num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas) ?? pdvComandas;
