@@ -165,14 +165,22 @@ function buildModuloDescricao(
 function buildGestaoLegalModulos(): Record<string, unknown>[] {
   return [
     {
+      id: "licenca-pdv",
       nome: "Licença PDV",
+      descricao: "Qtde 3 × R$ 33,33 (unitário)",
+      ativo: true,
+      valor: 100.0,
       quantidade: 3,
       valorUnitario: 33.33,
       valorTotal: 100.0,
       status: "Ativo",
     },
     {
+      id: "estoque",
       nome: "Estoque",
+      descricao: "Qtde 1 × R$ 49,90 (unitário)",
+      ativo: true,
+      valor: 49.9,
       quantidade: 1,
       valorUnitario: 49.9,
       valorTotal: 49.9,
@@ -447,10 +455,13 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
     update.status = bloqueado ? "Bloqueado" : "Ativo";
     const motivo = str(lic.motivoBloqueio);
     if (motivo) update.motivo_bloqueio = motivo;
-    const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+    const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
       lic,
       produto,
     );
+    const modulosNorm = isProdutoGestaoLegal(produto)
+      ? buildGestaoLegalModulos()
+      : modulosExtraidos;
     if (modulosNorm) update.modulos_ativos = modulosNorm;
     // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
     const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
@@ -611,10 +622,13 @@ function mapLicenciamentoToRow(
   row.qtd_pdv_comandas = pdvComandas && pdvComandas > 0 ? pdvComandas : qtdPdv;
   const motivo = str(lic.motivoBloqueio ?? lic.MotivoBloqueio);
   if (motivo) row.motivo_bloqueio = motivo;
-  const { modulos: modulosNorm, custo: custoModulos } = extrairModulosECusto(
+  const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(
     lic,
     produto,
   );
+  const modulosNorm = isProdutoGestaoLegal(produto)
+    ? buildGestaoLegalModulos()
+    : modulosExtraidos;
   if (modulosNorm) row.modulos_ativos = modulosNorm;
   // Comandas/Mesas NÃO escalam (0 ou 1): lê o valor real, nunca copia PDVs.
   const qtdComandasApi = num(lic.qtdComandas ?? lic.QtdComandas ?? lic.comandas ?? lic.Comandas);
