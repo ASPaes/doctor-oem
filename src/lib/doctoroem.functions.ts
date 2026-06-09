@@ -115,13 +115,84 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<Cliente | null> => {
     const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
     const supabase = getDoctorOemAdmin();
+
+    // 1) Carrega o cliente atual para obter cnpj_cpf e códigos.
+    const { data: current, error: curErr } = await supabase
+      .from("clientes_oem")
+      .select("*")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (curErr) throw new Error(`DoctorOEM forceSync (load): ${curErr.message}`);
+    if (!current) return null;
+
+    // 2) Chama a API real do Software OEM.
+    const baseUrl = process.env.OEM_API_BASE_URL;
+    const apiKey = process.env.OEM_API_KEY;
+    const method = (process.env.OEM_API_METHOD ?? "POST").toUpperCase() === "GET" ? "GET" : "POST";
+    if (!baseUrl || !apiKey) {
+      throw new Error(
+        "OEM API: variáveis OEM_API_BASE_URL e/ou OEM_API_KEY ausentes nos secrets.",
+      );
+    }
+
+    const cnpj = (current as ClienteRow).cnpj_cpf;
+    const url = new URL(baseUrl);
+    if (method === "GET") {
+      url.searchParams.set("cnpj_cpf", cnpj);
+      url.searchParams.set("id", data.id);
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "X-API-Key": apiKey,
+    };
+
+    const resp = await fetch(url.toString(), {
+      method,
+      headers,
+      body: method === "POST" ? JSON.stringify({ id: data.id, cnpj_cpf: cnpj }) : undefined,
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`OEM API ${resp.status}: ${text.slice(0, 300)}`);
+    }
+
+    const payload = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+
+    // 3) Faz upsert/update apenas das colunas permitidas que vieram no payload.
+    const allowed = [
+      "razao_social",
+      "nome_fantasia",
+      "grupo_economico",
+      "produto_principal",
+      "numero_filiais",
+      "status",
+      "bloqueado",
+      "motivo_bloqueio",
+      "usuarios_adicionais",
+      "qtd_pdv",
+      "qtd_comandas",
+      "qtd_pdv_comandas",
+      "custo_total",
+      "modulos_ativos",
+      "licencas_detalhe",
+    ] as const;
+
+    const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
+    for (const key of allowed) {
+      if (key in payload && payload[key] !== undefined) update[key] = payload[key];
+    }
+
     const { data: row, error } = await supabase
       .from("clientes_oem")
-      .update({ last_sync: new Date().toISOString() })
+      .update(update)
       .eq("id", data.id)
       .select("*")
       .maybeSingle();
-    if (error) throw new Error(`DoctorOEM forceSync: ${error.message}`);
+    if (error) throw new Error(`DoctorOEM forceSync (save): ${error.message}`);
     return row ? mapCliente(row as ClienteRow) : null;
   });
 
