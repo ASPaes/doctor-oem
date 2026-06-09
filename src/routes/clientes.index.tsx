@@ -1,10 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Search, Building2 } from "lucide-react";
-import { clientesMock, formatBRL } from "@/lib/mock-data";
+import { formatBRL } from "@/lib/mock-data";
+import { listClientes } from "@/lib/doctoroem.functions";
+import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useRole } from "@/lib/role-context";
+
+const clientesQueryOptions = queryOptions({
+  queryKey: ["doctoroem", "clientes"],
+  queryFn: () => listClientes(),
+});
 
 export const Route = createFileRoute("/clientes/")({
   head: () => ({
@@ -13,13 +20,21 @@ export const Route = createFileRoute("/clientes/")({
       { name: "description", content: "Lista completa de clientes, status operacional e custos mensais." },
     ],
   }),
+  loader: ({ context }) => context.queryClient.ensureQueryData(clientesQueryOptions),
   component: ClientesList,
+  pendingComponent: () => (
+    <div className="p-10 text-center text-muted-foreground">Carregando clientes do DoctorOEM…</div>
+  ),
+  errorComponent: ({ error }) => (
+    <div className="p-10 text-center text-destructive">{error.message}</div>
+  ),
 });
 
 function ClientesList() {
   const [q, setQ] = useState("");
   const { canSeeFinance } = useRole();
-  const list = clientesMock.filter(
+  const { data: clientes } = useSuspenseQuery(clientesQueryOptions);
+  const list = clientes.filter(
     (c) =>
       !q ||
       c.nomeFantasia.toLowerCase().includes(q.toLowerCase()) ||
