@@ -205,7 +205,7 @@ async function persistirLote(
 
   const { data, error } = await supabase
     .from("clientes_oem")
-    .upsert(payload)
+    .upsert(payload, { onConflict: "filial_codigo" })
     .select("id, filial_codigo");
 
   if (!error) {
