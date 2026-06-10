@@ -42,9 +42,14 @@ export const Route = createFileRoute("/api/public/oem-sync")({
           return new Response("Unauthorized", { status: 401 });
         }
 
+        // Body opcional { "forcar": true } executa como manual (ignora o
+        // intervalo configurado) — útil para cargas iniciais sob demanda.
+        const body = (await request.json().catch(() => null)) as { forcar?: boolean } | null;
+        const origem = body?.forcar === true ? ("manual" as const) : ("cron" as const);
+
         const { runScheduledOemSync } = await import("@/lib/oem-sync.server");
         try {
-          const result = await runScheduledOemSync("cron");
+          const result = await runScheduledOemSync(origem);
           return Response.json(result, { status: result.status === "erro" ? 500 : 200 });
         } catch (e) {
           return Response.json(
