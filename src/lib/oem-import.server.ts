@@ -405,7 +405,10 @@ async function descobrirEmpresaPorVarredura(
     const row = mapLicenciamentoToRow(lic, codEmpresa, codFilial);
     if (!row) continue;
 
-    return { row: { key: buildKey(codEmpresa, codFilial), row }, consultas };
+    return {
+      row: { key: buildKey(codEmpresa, codFilial), filialKey: filialKeyFromRow(row), row },
+      consultas,
+    };
   }
 
   return { row: null, consultas };
@@ -413,8 +416,7 @@ async function descobrirEmpresaPorVarredura(
 
 async function importarPorVarredura(
   accessToken: string,
-  existingByKey: Map<string, string>,
-  existingByCnpj: Map<string, string>,
+  existingByFilial: Map<string, string>,
   offsets: number[],
 ): Promise<OemImportResult> {
   const inicio = parseEnvInt("OEM_COD_EMPRESA_INICIO", OEM_SCAN_START);
