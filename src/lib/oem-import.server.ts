@@ -64,7 +64,8 @@ export type OemImportResult = {
 
 const OEM_API_ORIGIN = "https://api.pdvlegal.com.br";
 const OEM_LISTAGEM_BATCH = 20;
-const OEM_LISTAGEM_PAUSA_MS = 1000;
+const OEM_LISTAGEM_PAUSA_MS = 0;
+const OEM_VARREDURA_PAUSA_MS = 1000;
 const OEM_SCAN_START = 30000;
 const OEM_SCAN_END = 33000;
 const OEM_OFFSET_FILIAL_PADRAO = 6633;
@@ -330,7 +331,7 @@ async function importarCandidatos(
       `[OEM import] lote ${Math.floor(i / OEM_LISTAGEM_BATCH) + 1}/${Math.ceil(candidates.length / OEM_LISTAGEM_BATCH)} concluído (${inserted} novos, ${updated} atualizados, ${falhas} falhas).`,
     );
 
-    if (i + OEM_LISTAGEM_BATCH < candidates.length) {
+    if (OEM_LISTAGEM_PAUSA_MS > 0 && i + OEM_LISTAGEM_BATCH < candidates.length) {
       await sleep(OEM_LISTAGEM_PAUSA_MS);
     }
   }
@@ -423,7 +424,7 @@ async function importarPorVarredura(
     );
 
     if (i + OEM_LISTAGEM_BATCH < empresas.length) {
-      await sleep(OEM_LISTAGEM_PAUSA_MS);
+      await sleep(OEM_VARREDURA_PAUSA_MS);
     }
   }
 
