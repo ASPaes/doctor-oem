@@ -5,13 +5,7 @@
 // API da TabletCloud. Cada execução grava um log em oem_sync_logs.
 // ============================================================
 import { getDoctorOemAdmin } from "@/lib/doctoroem-admin.server";
-import {
-  obterTokenOem,
-  fetchLicenciamentoOem,
-  mapLicenciamentoToRow,
-} from "@/lib/doctoroem.functions";
-
-const CHUNK_SIZE = 20;
+import { runBulkImportOem } from "@/lib/oem-import.server";
 
 export type SyncRunResult = {
   status: "sucesso" | "erro" | "ignorado";
@@ -109,70 +103,17 @@ export async function runScheduledOemSync(
   }
 
   try {
-    // 3) Autentica uma única vez e carrega todos os clientes cadastrados.
-    const accessToken = await obterTokenOem(origem === "cron" ? "scheduledSync" : "manualSync");
-
-    const { data: clientes, error: selErr } = await supabase
-      .from("clientes_oem")
-      .select("id, empresa_codigo, filial_codigo");
-    if (selErr) throw new Error(`clientes_oem (load): ${selErr.message}`);
-
-    const lista = clientes ?? [];
-    let atualizados = 0;
-    let falhas = 0;
-
-    // 4) Processa em chunks de 20 — requisições paralelas dentro do lote,
-    //    lotes sequenciais para não estourar o servidor da TabletCloud.
-    for (let i = 0; i < lista.length; i += CHUNK_SIZE) {
-      const chunk = lista.slice(i, i + CHUNK_SIZE);
-      await Promise.allSettled(
-        chunk.map(async (cliente) => {
-          const codEmpresa = parseInt(String(cliente.empresa_codigo).replace(/\D/g, ""), 10);
-          const codFilial = parseInt(String(cliente.filial_codigo).replace(/\D/g, ""), 10);
-          if (!Number.isFinite(codEmpresa) || !Number.isFinite(codFilial)) {
-            falhas += 1;
-            return;
-          }
-
-          const lic = await fetchLicenciamentoOem(accessToken, codEmpresa, codFilial);
-          if (!lic) {
-            falhas += 1;
-            return;
-          }
-
-          const row = mapLicenciamentoToRow(lic, codEmpresa, codFilial);
-          if (!row) {
-            falhas += 1;
-            return;
-          }
-
-          const { error: updErr } = await supabase
-            .from("clientes_oem")
-            .update(row)
-            .eq("id", cliente.id as string);
-          if (updErr) {
-            console.error(
-              `[OEM scheduledSync] falha ao atualizar ${codEmpresa}/${codFilial}:`,
-              updErr.message,
-            );
-            falhas += 1;
-          } else {
-            atualizados += 1;
-          }
-        }),
-      );
-      console.log(
-        `[OEM scheduledSync] lote ${Math.floor(i / CHUNK_SIZE) + 1}/${Math.ceil(lista.length / CHUNK_SIZE)} concluído (${atualizados} ok, ${falhas} falhas).`,
-      );
-    }
+    const importResult = await runBulkImportOem(origem === "cron" ? "scheduledSync" : "manualSync");
 
     const result: SyncRunResult = {
       status: "sucesso",
-      atualizados,
-      falhas,
-      total: lista.length,
+      atualizados: importResult.inserted + importResult.updated,
+      falhas: importResult.falhas,
+      total: importResult.total,
       duracaoMs: Date.now() - inicio,
-      mensagem: `${atualizados} cliente(s) atualizado(s) de ${lista.length}, ${falhas} falha(s).`,
+      mensagem:
+        `${importResult.inserted} novo(s), ${importResult.updated} atualizado(s), ` +
+        `${importResult.falhas} falha(s), ${importResult.scanned} consulta(s) via ${importResult.origem}.`,
     };
     await registrarLog(supabase, origem, result);
     return result;
