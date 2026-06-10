@@ -909,7 +909,7 @@ function staticHolder(token: string): TokenHolder {
 }
 
 /** Cria um holder que renova o token via obterTokenOem (com de-dup de refresh concorrente). */
-export function criarTokenHolder(escopo: string, initial: string): TokenHolder {
+export function criarTokenHolder(escopo: string, initial = ""): TokenHolder {
   const holder: TokenHolder = {
     value: initial,
     clear: () => {
