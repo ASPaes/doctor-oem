@@ -326,12 +326,15 @@ async function importarCandidatos(
   let updated = 0;
   let scanned = 0;
   let falhas = 0;
-  let pendentes: PersistCandidate[] = [];
 
-  for (let i = 0; i < candidates.length; i += OEM_LISTAGEM_BATCH) {
-    const batch = candidates.slice(i, i + OEM_LISTAGEM_BATCH);
+  // Divide a listagem geral em micro-lotes de exatamente 25 clientes.
+  const chunks = chunkArray(candidates, OEM_LISTAGEM_BATCH);
+  let chunkIndex = 0;
+
+  for (const chunk of chunks) {
+    chunkIndex += 1;
     const resolved = await Promise.all(
-      batch.map(async (candidate): Promise<PersistCandidate | null> => {
+      chunk.map(async (candidate): Promise<PersistCandidate | null> => {
         scanned += 1;
 
         const licDetalhada = await fetchLicenciamentoOem(
@@ -353,33 +356,22 @@ async function importarCandidatos(
     );
 
     const validRows = resolved.filter((item): item is PersistCandidate => item !== null);
-    falhas += batch.length - validRows.length;
-    pendentes.push(...validRows);
+    falhas += chunk.length - validRows.length;
 
-    // Grava no banco em blocos de 50 em 50 (chunks controlados).
-    while (pendentes.length >= OEM_PERSIST_CHUNK) {
-      const chunk = pendentes.slice(0, OEM_PERSIST_CHUNK);
-      pendentes = pendentes.slice(OEM_PERSIST_CHUNK);
-      const saved = await persistirLote(chunk, existingByFilial);
-      inserted += saved.inserted;
-      updated += saved.updated;
-      falhas += saved.falhas;
-    }
-
-    console.log(
-      `[OEM import] lote ${Math.floor(i / OEM_LISTAGEM_BATCH) + 1}/${Math.ceil(candidates.length / OEM_LISTAGEM_BATCH)} concluído (${inserted} novos, ${updated} atualizados, ${falhas} falhas).`,
-    );
-
-    if (OEM_LISTAGEM_PAUSA_MS > 0 && i + OEM_LISTAGEM_BATCH < candidates.length) {
-      await sleep(OEM_LISTAGEM_PAUSA_MS);
-    }
-  }
-
-  if (pendentes.length) {
-    const saved = await persistirLote(pendentes, existingByFilial);
+    // Persiste o micro-lote imediatamente (upsert com onConflict=filial_codigo).
+    const saved = await persistirLote(validRows, existingByFilial);
     inserted += saved.inserted;
     updated += saved.updated;
     falhas += saved.falhas;
+
+    console.log(
+      `[OEM import] micro-lote ${chunkIndex}/${chunks.length} concluído (${inserted} novos, ${updated} atualizados, ${falhas} falhas).`,
+    );
+
+    // Pausa entre micro-lotes para evitar rejeições do gateway.
+    if (OEM_LISTAGEM_PAUSA_MS > 0 && chunkIndex < chunks.length) {
+      await sleep(OEM_LISTAGEM_PAUSA_MS);
+    }
   }
 
   return { inserted, updated, total: candidates.length, scanned, falhas };
