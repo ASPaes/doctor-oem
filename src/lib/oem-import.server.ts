@@ -64,9 +64,10 @@ export type OemImportResult = {
 };
 
 const OEM_API_ORIGIN = "https://api.pdvlegal.com.br";
-const OEM_LISTAGEM_BATCH = 20;
-const OEM_PERSIST_CHUNK = 50;
-const OEM_LISTAGEM_PAUSA_MS = 0;
+// Micro-lotes de exatamente 25 clientes, com pausa entre cada um
+// para dar fôlego ao gateway e à API do OEM.
+const OEM_LISTAGEM_BATCH = 25;
+const OEM_LISTAGEM_PAUSA_MS = 750;
 const OEM_VARREDURA_PAUSA_MS = 1000;
 const OEM_SCAN_START = 30000;
 const OEM_SCAN_END = 33000;
@@ -75,6 +76,15 @@ const OEM_DELTAS_FILIAL = [0, 1, -1, 2, -2];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Divide uma lista em micro-lotes de tamanho fixo. */
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
 }
 
 function toNumber(value: unknown): number | null {
