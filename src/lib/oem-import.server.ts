@@ -198,10 +198,10 @@ async function persistirLote(
   const deduped = [...dedupedMap.values()];
 
   const existingSnapshot = new Set(existingByFilial.keys());
-  const payload = deduped.map(({ filialKey, row }) => {
-    const id = existingByFilial.get(filialKey);
-    return id ? { ...row, id } : row;
-  });
+  // Não enviamos "id": o conflito é resolvido pelo índice único de
+  // filial_codigo. Misturar linhas com e sem id faz o PostgREST enviar
+  // id=null para as novas e violar o NOT NULL da coluna.
+  const payload = deduped.map(({ row }) => row);
 
   const { data, error } = await supabase
     .from("clientes_oem")
