@@ -87,10 +87,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "description", content: "Hub central de gestão de clientes, licenças e integrações OEM com painel financeiro e gateway de APIs." },
       { name: "author", content: "Nexus Hub" },
       { property: "og:title", content: "Nexus Hub — Gestão de Clientes e Licenças OEM" },
-      { property: "og:description", content: "Painel premium para gestão de clientes, licenças OEM, módulos contratados e integrações via API." },
+      { property: "og:description", content: "Hub central de gestão de clientes, licenças e integrações OEM com painel financeiro e gateway de APIs." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "Nexus Hub — Gestão de Clientes e Licenças OEM" },
+      { name: "twitter:description", content: "Hub central de gestão de clientes, licenças e integrações OEM com painel financeiro e gateway de APIs." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/83e6eae2-9036-4285-9765-e6438876afa9/id-preview-572c8bac--53a70adb-c30f-488e-9a31-b743fcbc40ab.lovable.app-1781054850626.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/83e6eae2-9036-4285-9765-e6438876afa9/id-preview-572c8bac--53a70adb-c30f-488e-9a31-b743fcbc40ab.lovable.app-1781054850626.png" },
     ],
     links: [
       {
