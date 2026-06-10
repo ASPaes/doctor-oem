@@ -453,7 +453,7 @@ async function importarPorVarredura(
     );
     total += dedupedRows.length;
 
-    const saved = await persistirLote(dedupedRows, existingByKey, existingByCnpj);
+    const saved = await persistirLote(dedupedRows, existingByFilial);
     inserted += saved.inserted;
     updated += saved.updated;
     falhas += saved.falhas;
@@ -473,11 +473,11 @@ async function importarPorVarredura(
 export async function runBulkImportOem(
   escopo: "bulkSync" | "scheduledSync" | "manualSync",
 ): Promise<OemImportResult> {
-  const { existingByKey, existingByCnpj, offsets } = await carregarExistentes();
+  const { existingByFilial, offsets } = await carregarExistentes();
   const accessToken = await obterTokenOem(escopo);
 
   try {
-    const listed = await tentarListagemCompleta(accessToken, existingByKey, existingByCnpj);
+    const listed = await tentarListagemCompleta(accessToken, existingByFilial);
     if (listed) return listed;
   } catch (error) {
     console.warn(
@@ -486,5 +486,5 @@ export async function runBulkImportOem(
     );
   }
 
-  return importarPorVarredura(accessToken, existingByKey, existingByCnpj, offsets);
+  return importarPorVarredura(accessToken, existingByFilial, offsets);
 }
