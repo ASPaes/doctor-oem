@@ -291,7 +291,6 @@ async function persistirLote(
   return { inserted, updated, falhas };
 }
 
-async function carregarCandidatosDaListagem(accessToken: string): Promise<Candidate[]> {
 async function carregarCandidatosDaListagem(holder: TokenHolder): Promise<Candidate[]> {
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
