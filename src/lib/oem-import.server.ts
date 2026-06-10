@@ -330,7 +330,7 @@ async function carregarCandidatosDaListagem(holder: TokenHolder): Promise<Candid
 }
 
 async function importarCandidatos(
-  accessToken: string,
+  holder: TokenHolder,
   candidates: Candidate[],
   existingByFilial: Map<string, string>,
 ): Promise<{ inserted: number; updated: number; total: number; scanned: number; falhas: number }> {
@@ -350,7 +350,7 @@ async function importarCandidatos(
         scanned += 1;
 
         const licDetalhada = await fetchLicenciamentoOem(
-          accessToken,
+          holder,
           candidate.codEmpresa,
           candidate.codFilial,
         );
@@ -390,19 +390,19 @@ async function importarCandidatos(
 }
 
 async function tentarListagemCompleta(
-  accessToken: string,
+  holder: TokenHolder,
   existingByFilial: Map<string, string>,
 ): Promise<OemImportResult | null> {
-  const candidates = await carregarCandidatosDaListagem(accessToken);
+  const candidates = await carregarCandidatosDaListagem(holder);
   if (!candidates.length) return null;
 
   console.log(`[OEM import] listagem geral detectada: ${candidates.length} filiais encontradas.`);
-  const result = await importarCandidatos(accessToken, candidates, existingByFilial);
+  const result = await importarCandidatos(holder, candidates, existingByFilial);
   return { ...result, origem: "listagem" };
 }
 
 async function descobrirEmpresaPorVarredura(
-  accessToken: string,
+  holder: TokenHolder,
   codEmpresa: number,
   offsetFilial: number,
 ): Promise<{ row: PersistCandidate | null; consultas: number }> {
@@ -413,7 +413,7 @@ async function descobrirEmpresaPorVarredura(
     if (codFilial <= 0) continue;
 
     consultas += 1;
-    const lic = await fetchLicenciamentoOem(accessToken, codEmpresa, codFilial);
+    const lic = await fetchLicenciamentoOem(holder, codEmpresa, codFilial);
     if (!lic) continue;
 
     const row = mapLicenciamentoToRow(lic, codEmpresa, codFilial);
@@ -429,7 +429,7 @@ async function descobrirEmpresaPorVarredura(
 }
 
 async function importarPorVarredura(
-  accessToken: string,
+  holder: TokenHolder,
   existingByFilial: Map<string, string>,
   offsets: number[],
 ): Promise<OemImportResult> {
@@ -454,7 +454,7 @@ async function importarPorVarredura(
   for (let i = 0; i < empresas.length; i += OEM_LISTAGEM_BATCH) {
     const batchEmpresas = empresas.slice(i, i + OEM_LISTAGEM_BATCH);
     const batchResults = await Promise.all(
-      batchEmpresas.map((codEmpresa) => descobrirEmpresaPorVarredura(accessToken, codEmpresa, offsetFilial)),
+      batchEmpresas.map((codEmpresa) => descobrirEmpresaPorVarredura(holder, codEmpresa, offsetFilial)),
     );
 
     scanned += batchResults.reduce((sum, item) => sum + item.consultas, 0);
@@ -488,10 +488,12 @@ export async function runBulkImportOem(
   escopo: "bulkSync" | "scheduledSync" | "manualSync",
 ): Promise<OemImportResult> {
   const { existingByFilial, offsets } = await carregarExistentes();
+  // Token novo no início + renovação automática dentro do loop em caso de 401.
   const accessToken = await obterTokenOem(escopo);
+  const holder = criarTokenHolder(escopo, accessToken);
 
   try {
-    const listed = await tentarListagemCompleta(accessToken, existingByFilial);
+    const listed = await tentarListagemCompleta(holder, existingByFilial);
     if (listed) return listed;
   } catch (error) {
     console.warn(
@@ -500,5 +502,5 @@ export async function runBulkImportOem(
     );
   }
 
-  return importarPorVarredura(accessToken, existingByFilial, offsets);
+  return importarPorVarredura(holder, existingByFilial, offsets);
 }
