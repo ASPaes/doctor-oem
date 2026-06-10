@@ -897,7 +897,7 @@ export async function fetchLicenciamentoOem(
 export type TokenHolder = {
   value: string;
   clear: () => void;
-  refresh?: () => Promise<void>;
+  refresh?: (reason?: TokenRefreshReason) => Promise<void>;
 };
 
 function isTokenHolder(v: unknown): v is TokenHolder {

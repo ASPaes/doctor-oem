@@ -488,9 +488,12 @@ export async function runBulkImportOem(
   escopo: "bulkSync" | "scheduledSync" | "manualSync",
 ): Promise<OemImportResult> {
   const { existingByFilial, offsets } = await carregarExistentes();
-  // Token novo no início + renovação automática dentro do loop em caso de 401.
-  const accessToken = await obterTokenOem(escopo);
+  // Limpa qualquer estado local e força um login OAuth2 totalmente novo
+  // antes do primeiro micro-lote da carga.
+  const accessToken = await obterTokenOem(escopo, { forceRefresh: true });
   const holder = criarTokenHolder(escopo, accessToken);
+  holder.clear();
+  await holder.refresh?.("startup");
 
   try {
     const listed = await tentarListagemCompleta(holder, existingByFilial);
