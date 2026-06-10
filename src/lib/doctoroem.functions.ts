@@ -833,15 +833,29 @@ export async function obterTokenOem(escopo: string): Promise<string> {
  * licença existe, ou null em 404/erros de cliente (empresa/filial inexistente).
  */
 export async function fetchLicenciamentoOem(
-  accessToken: string,
+  accessTokenOrHolder: string | TokenHolder,
   codEmpresa: number,
   codFilial: number,
 ): Promise<Record<string, unknown> | null> {
   const licUrl = `${OEM_API_ORIGIN}/v1/licenciamento/${codEmpresa}/${codFilial}`;
-  const licResp = await fetch(licUrl, {
+  const holder = isTokenHolder(accessTokenOrHolder)
+    ? accessTokenOrHolder
+    : staticHolder(accessTokenOrHolder);
+
+  let licResp = await fetch(licUrl, {
     method: "GET",
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
   });
+
+  // Token vencido durante o loop longo: renova uma única vez e refaz a chamada.
+  if (licResp.status === 401 && holder.refresh) {
+    console.warn(`[OEM] 401 em /v1/licenciamento/${codEmpresa}/${codFilial} — renovando token e tentando novamente.`);
+    await holder.refresh();
+    licResp = await fetch(licUrl, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
+    });
+  }
 
   if (!licResp.ok) {
     if (licResp.status >= 500) {
@@ -856,6 +870,41 @@ export async function fetchLicenciamentoOem(
   const raw = (await licResp.json().catch(() => null)) as Record<string, unknown> | null;
   if (!raw || typeof raw !== "object") return null;
   return unwrapLicenciamentoPayload(raw);
+}
+
+/**
+ * Container mutável de token compartilhado entre chamadas paralelas.
+ * Permite renovar o access_token uma única vez quando a API responde 401.
+ */
+export type TokenHolder = {
+  value: string;
+  refresh?: () => Promise<void>;
+};
+
+function isTokenHolder(v: unknown): v is TokenHolder {
+  return !!v && typeof v === "object" && "value" in (v as Record<string, unknown>);
+}
+
+function staticHolder(token: string): TokenHolder {
+  return { value: token };
+}
+
+/** Cria um holder que renova o token via obterTokenOem (com de-dup de refresh concorrente). */
+export function criarTokenHolder(escopo: string, initial: string): TokenHolder {
+  const holder: TokenHolder = { value: initial };
+  let pending: Promise<void> | null = null;
+  holder.refresh = async () => {
+    if (pending) return pending;
+    pending = (async () => {
+      try {
+        holder.value = await obterTokenOem(`${escopo}:refresh`);
+      } finally {
+        pending = null;
+      }
+    })();
+    return pending;
+  };
+  return holder;
 }
 
 export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
