@@ -779,8 +779,16 @@ export function mapLicenciamentoToRow(
 
 const OEM_API_ORIGIN = "https://api.pdvlegal.com.br";
 
-/** Autentica via OAuth2 (password grant) e retorna o access_token. */
-export async function obterTokenOem(escopo: string): Promise<string> {
+type TokenRequestOptions = {
+  forceRefresh?: boolean;
+};
+
+type TokenRefreshReason = "startup" | "401" | "manual";
+
+async function solicitarNovoTokenOem(
+  escopo: string,
+  options?: TokenRequestOptions,
+): Promise<string> {
   const clientId = process.env.OEM_CLIENT_ID;
   const clientSecret = process.env.OEM_CLIENT_SECRET;
   const username = process.env.OEM_API_USERNAME;
@@ -799,7 +807,9 @@ export async function obterTokenOem(escopo: string): Promise<string> {
     client_secret: clientSecret,
   });
 
-  console.log(`[OEM ${escopo}] OAuth2: solicitando token em`, `${OEM_API_ORIGIN}/token`);
+  console.log(
+    `[OEM ${escopo}] OAuth2: solicitando token novo em ${OEM_API_ORIGIN}/token (forceRefresh=${options?.forceRefresh === true}).`,
+  );
   const tokenResp = await fetch(`${OEM_API_ORIGIN}/token`, {
     method: "POST",
     headers: {
@@ -828,6 +838,11 @@ export async function obterTokenOem(escopo: string): Promise<string> {
   return accessToken;
 }
 
+/** Autentica via OAuth2 (password grant) e retorna sempre um access_token novo. */
+export async function obterTokenOem(escopo: string, options?: TokenRequestOptions): Promise<string> {
+  return solicitarNovoTokenOem(escopo, options);
+}
+
 /**
  * GET /v1/licenciamento/{emp}/{fil}. Retorna o payload "desembrulhado" quando a
  * licença existe, ou null em 404/erros de cliente (empresa/filial inexistente).
@@ -847,10 +862,13 @@ export async function fetchLicenciamentoOem(
     headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
   });
 
-  // Token vencido durante o loop longo: renova uma única vez e refaz a chamada.
+  // Token vencido durante o loop longo: limpa o estado, aguarda 2s,
+  // busca outro token novo e refaz a chamada uma única vez.
   if (licResp.status === 401 && holder.refresh) {
-    console.warn(`[OEM] 401 em /v1/licenciamento/${codEmpresa}/${codFilial} — renovando token e tentando novamente.`);
-    await holder.refresh();
+    console.warn(
+      `[OEM] 401 em /v1/licenciamento/${codEmpresa}/${codFilial} — limpando token e renovando com nova autenticação.`,
+    );
+    await holder.refresh("401");
     licResp = await fetch(licUrl, {
       method: "GET",
       headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
@@ -878,6 +896,7 @@ export async function fetchLicenciamentoOem(
  */
 export type TokenHolder = {
   value: string;
+  clear: () => void;
   refresh?: () => Promise<void>;
 };
 
@@ -886,18 +905,27 @@ function isTokenHolder(v: unknown): v is TokenHolder {
 }
 
 function staticHolder(token: string): TokenHolder {
-  return { value: token };
+  return { value: token, clear: () => undefined };
 }
 
 /** Cria um holder que renova o token via obterTokenOem (com de-dup de refresh concorrente). */
 export function criarTokenHolder(escopo: string, initial: string): TokenHolder {
-  const holder: TokenHolder = { value: initial };
+  const holder: TokenHolder = {
+    value: initial,
+    clear: () => {
+      holder.value = "";
+    },
+  };
   let pending: Promise<void> | null = null;
-  holder.refresh = async () => {
+  holder.refresh = async (reason: TokenRefreshReason = "manual") => {
     if (pending) return pending;
     pending = (async () => {
       try {
-        holder.value = await obterTokenOem(`${escopo}:refresh`);
+        if (reason === "401") {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        holder.clear();
+        holder.value = await obterTokenOem(`${escopo}:refresh:${reason}`, { forceRefresh: true });
       } finally {
         pending = null;
       }
