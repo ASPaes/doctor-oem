@@ -69,7 +69,7 @@ const OEM_API_ORIGIN = "https://api.pdvlegal.com.br";
 // Micro-lotes de exatamente 25 clientes, com pausa entre cada um
 // para dar fôlego ao gateway e à API do OEM.
 const OEM_LISTAGEM_BATCH = 25;
-const OEM_LISTAGEM_PAUSA_MS = 750;
+const OEM_LISTAGEM_PAUSA_MS = 600;
 const OEM_VARREDURA_PAUSA_MS = 1000;
 const OEM_SCAN_START = 30000;
 const OEM_SCAN_END = 33000;
