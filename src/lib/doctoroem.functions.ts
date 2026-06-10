@@ -778,13 +778,6 @@ export function mapLicenciamentoToRow(
 }
 
 const OEM_API_ORIGIN = "https://api.pdvlegal.com.br";
-// Faixa real onde os clientes da base moram (sobrescritível por env vars).
-const OEM_COD_EMPRESA_INICIO = 31600;
-const OEM_COD_EMPRESA_FIM = 31650;
-// Deslocamento padrão filial − empresa observado na base (38259 − 31626).
-const OEM_OFFSET_FILIAL_PADRAO = 6633;
-// Variações testadas em torno da filial esperada ao varrer novas empresas.
-const OEM_DELTAS_FILIAL = [0, 1, -1, 2, -2];
 
 /** Autentica via OAuth2 (password grant) e retorna o access_token. */
 export async function obterTokenOem(escopo: string): Promise<string> {
@@ -865,107 +858,21 @@ export async function fetchLicenciamentoOem(
   return unwrapLicenciamentoPayload(raw);
 }
 
-function parseEnvInt(name: string, fallback: number): number {
-  const n = parseInt(process.env[name] ?? "", 10);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
   async (): Promise<{ inserted: number; updated: number; total: number; scanned: number }> => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
-
-    const accessToken = await obterTokenOem("bulkSync");
-
-    let inserted = 0;
-    let updated = 0;
-    let scanned = 0;
-
-    // 1) ATUALIZA todos os clientes já existentes no banco com o mesmo
-    //    mapeador validado no VERDAO BAR (extrairModulosECusto + métricas).
-    const { data: existentes, error: selErr } = await supabase
-      .from("clientes_oem")
-      .select("id, empresa_codigo, filial_codigo");
-    if (selErr) throw new Error(`DoctorOEM bulkSync (load): ${selErr.message}`);
-
-    const empresasConhecidas = new Set<number>();
-    const offsetsObservados: number[] = [];
-
-    for (const existente of existentes ?? []) {
-      const codEmpresa = parseInt(String(existente.empresa_codigo).replace(/\D/g, ""), 10);
-      const codFilial = parseInt(String(existente.filial_codigo).replace(/\D/g, ""), 10);
-      if (!Number.isFinite(codEmpresa) || !Number.isFinite(codFilial)) continue;
-
-      empresasConhecidas.add(codEmpresa);
-      offsetsObservados.push(codFilial - codEmpresa);
-
-      scanned += 1;
-      const lic = await fetchLicenciamentoOem(accessToken, codEmpresa, codFilial);
-      if (!lic) {
-        console.warn(`[OEM bulkSync] sem retorno para ${codEmpresa}/${codFilial}, mantendo registro.`);
-        continue;
-      }
-
-      const row = mapLicenciamentoToRow(lic, codEmpresa, codFilial);
-      if (!row) continue;
-
-      const { error: updErr } = await supabase
-        .from("clientes_oem")
-        .update(row)
-        .eq("id", existente.id as string);
-      if (updErr) {
-        console.error(`[OEM bulkSync] falha ao atualizar ${codEmpresa}/${codFilial}:`, updErr.message);
-        continue;
-      }
-      updated += 1;
-      console.log(`[OEM bulkSync] atualizado ${codEmpresa}/${codFilial}.`);
-    }
-
-    // 2) VARREDURA da faixa real para capturar NOVAS empresas ativas no OEM.
-    const inicio = parseEnvInt("OEM_COD_EMPRESA_INICIO", OEM_COD_EMPRESA_INICIO);
-    const fim = parseEnvInt("OEM_COD_EMPRESA_FIM", OEM_COD_EMPRESA_FIM);
-    // Filial esperada = empresa + offset observado na própria base (fallback padrão).
-    const offsetFilial = offsetsObservados.length
-      ? offsetsObservados.sort((a, b) => a - b)[Math.floor(offsetsObservados.length / 2)]
-      : OEM_OFFSET_FILIAL_PADRAO;
+    const { runBulkImportOem } = await import("@/lib/oem-import.server");
+    const result = await runBulkImportOem("bulkSync");
 
     console.log(
-      `[OEM bulkSync] varrendo empresas ${inicio}..${fim} (offset de filial ${offsetFilial}).`,
+      `[OEM bulkSync] concluído via ${result.origem}: ${result.updated} atualizados, ${result.inserted} novos, ${result.scanned} consultas, ${result.falhas} falhas.`,
     );
 
-    for (let codEmpresa = inicio; codEmpresa <= fim; codEmpresa++) {
-      if (empresasConhecidas.has(codEmpresa)) continue;
-
-      for (const delta of OEM_DELTAS_FILIAL) {
-        const codFilial = codEmpresa + offsetFilial + delta;
-        if (codFilial <= 0) continue;
-
-        scanned += 1;
-        const lic = await fetchLicenciamentoOem(accessToken, codEmpresa, codFilial);
-        if (!lic) continue;
-
-        const row = mapLicenciamentoToRow(lic, codEmpresa, codFilial);
-        if (!row) continue;
-
-        const { error: insErr } = await supabase.from("clientes_oem").insert(row);
-        if (insErr) {
-          console.error(
-            `[OEM bulkSync] falha ao inserir novo cliente ${codEmpresa}/${codFilial}:`,
-            insErr.message,
-          );
-        } else {
-          inserted += 1;
-          console.log(`[OEM bulkSync] NOVO cliente capturado: ${codEmpresa}/${codFilial}.`);
-        }
-        break; // achou a filial desta empresa — passa para a próxima.
-      }
-    }
-
-    console.log(
-      `[OEM bulkSync] concluído: ${updated} atualizados, ${inserted} novos, ${scanned} consultas.`,
-    );
-
-    return { inserted, updated, total: updated + inserted, scanned };
+    return {
+      inserted: result.inserted,
+      updated: result.updated,
+      total: result.total,
+      scanned: result.scanned,
+    };
   },
 );
 
