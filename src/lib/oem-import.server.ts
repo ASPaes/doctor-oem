@@ -310,13 +310,13 @@ async function carregarCandidatosDaListagem(accessToken: string): Promise<Candid
 async function importarCandidatos(
   accessToken: string,
   candidates: Candidate[],
-  existingByKey: Map<string, string>,
-  existingByCnpj: Map<string, string>,
+  existingByFilial: Map<string, string>,
 ): Promise<{ inserted: number; updated: number; total: number; scanned: number; falhas: number }> {
   let inserted = 0;
   let updated = 0;
   let scanned = 0;
   let falhas = 0;
+  let pendentes: PersistCandidate[] = [];
 
   for (let i = 0; i < candidates.length; i += OEM_LISTAGEM_BATCH) {
     const batch = candidates.slice(i, i + OEM_LISTAGEM_BATCH);
@@ -338,16 +338,23 @@ async function importarCandidatos(
 
         const row = mapLicenciamentoToRow(payload, candidate.codEmpresa, candidate.codFilial);
         if (!row) return null;
-        return { key: candidate.key, row };
+        return { key: candidate.key, filialKey: filialKeyFromRow(row), row };
       }),
     );
 
     const validRows = resolved.filter((item): item is PersistCandidate => item !== null);
-    const saved = await persistirLote(validRows, existingByKey, existingByCnpj);
+    falhas += batch.length - validRows.length;
+    pendentes.push(...validRows);
 
-    inserted += saved.inserted;
-    updated += saved.updated;
-    falhas += batch.length - validRows.length + saved.falhas;
+    // Grava no banco em blocos de 50 em 50 (chunks controlados).
+    while (pendentes.length >= OEM_PERSIST_CHUNK) {
+      const chunk = pendentes.slice(0, OEM_PERSIST_CHUNK);
+      pendentes = pendentes.slice(OEM_PERSIST_CHUNK);
+      const saved = await persistirLote(chunk, existingByFilial);
+      inserted += saved.inserted;
+      updated += saved.updated;
+      falhas += saved.falhas;
+    }
 
     console.log(
       `[OEM import] lote ${Math.floor(i / OEM_LISTAGEM_BATCH) + 1}/${Math.ceil(candidates.length / OEM_LISTAGEM_BATCH)} concluído (${inserted} novos, ${updated} atualizados, ${falhas} falhas).`,
@@ -358,19 +365,25 @@ async function importarCandidatos(
     }
   }
 
+  if (pendentes.length) {
+    const saved = await persistirLote(pendentes, existingByFilial);
+    inserted += saved.inserted;
+    updated += saved.updated;
+    falhas += saved.falhas;
+  }
+
   return { inserted, updated, total: candidates.length, scanned, falhas };
 }
 
 async function tentarListagemCompleta(
   accessToken: string,
-  existingByKey: Map<string, string>,
-  existingByCnpj: Map<string, string>,
+  existingByFilial: Map<string, string>,
 ): Promise<OemImportResult | null> {
   const candidates = await carregarCandidatosDaListagem(accessToken);
   if (!candidates.length) return null;
 
   console.log(`[OEM import] listagem geral detectada: ${candidates.length} filiais encontradas.`);
-  const result = await importarCandidatos(accessToken, candidates, existingByKey, existingByCnpj);
+  const result = await importarCandidatos(accessToken, candidates, existingByFilial);
   return { ...result, origem: "listagem" };
 }
 
