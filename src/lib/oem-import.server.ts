@@ -187,7 +187,7 @@ async function persistirLote(
   const { data, error } = await supabase
     .from("clientes_oem")
     .upsert(payload)
-    .select("id, empresa_codigo, filial_codigo");
+    .select("id, empresa_codigo, filial_codigo, cnpj_cpf");
 
   if (!error) {
     for (const saved of (data ?? []) as ExistingClienteRow[]) {
@@ -237,7 +237,7 @@ async function persistirLote(
     const { data: insertedRow, error: insertError } = await supabase
       .from("clientes_oem")
       .insert(row)
-      .select("id, empresa_codigo, filial_codigo")
+      .select("id, empresa_codigo, filial_codigo, cnpj_cpf")
       .maybeSingle();
 
     if (insertError) {
