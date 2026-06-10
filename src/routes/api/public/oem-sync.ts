@@ -6,10 +6,21 @@ import { timingSafeEqual } from "node:crypto";
 // Segredo aceito: OEM_SYNC_CRON_SECRET (preferido) ou OEM_CLIENT_SECRET (fallback).
 function segredoValido(recebido: string | null): boolean {
   const esperado = process.env.OEM_SYNC_CRON_SECRET || process.env.OEM_CLIENT_SECRET;
-  if (!esperado || !recebido) return false;
+  if (!esperado || !recebido) {
+    console.log(
+      `[oem-sync] auth: temCronSecret=${Boolean(process.env.OEM_SYNC_CRON_SECRET)} temClientSecret=${Boolean(process.env.OEM_CLIENT_SECRET)} temHeader=${Boolean(recebido)}`,
+    );
+    return false;
+  }
   const a = Buffer.from(recebido);
   const b = Buffer.from(esperado);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const ok = a.length === b.length && timingSafeEqual(a, b);
+  if (!ok) {
+    console.log(
+      `[oem-sync] auth: segredo divergente (lenHeader=${a.length}, lenEsperado=${b.length}, fonte=${process.env.OEM_SYNC_CRON_SECRET ? "OEM_SYNC_CRON_SECRET" : "OEM_CLIENT_SECRET"})`,
+    );
+  }
+  return ok;
 }
 
 export const Route = createFileRoute("/api/public/oem-sync")({
