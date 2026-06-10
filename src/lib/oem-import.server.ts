@@ -186,39 +186,38 @@ async function carregarExistentes() {
 
 async function persistirLote(
   rows: PersistCandidate[],
-  existingByKey: Map<string, string>,
-  existingByCnpj: Map<string, string>,
+  existingByFilial: Map<string, string>,
 ): Promise<{ inserted: number; updated: number; falhas: number }> {
   if (!rows.length) return { inserted: 0, updated: 0, falhas: 0 };
 
   const supabase = getDoctorOemAdmin();
-  const existingSnapshot = new Set(existingByKey.keys());
-  const payload = rows.map(({ key, row }) => {
-    const cnpj = typeof row.cnpj_cpf === "string" ? row.cnpj_cpf.replace(/\D/g, "") : "";
-    const id = existingByKey.get(key) ?? (cnpj ? existingByCnpj.get(cnpj) : undefined);
+
+  // Deduplica dentro do lote pela chave exclusiva: o código da filial.
+  const dedupedMap = new Map<string, PersistCandidate>();
+  for (const item of rows) dedupedMap.set(item.filialKey, item);
+  const deduped = [...dedupedMap.values()];
+
+  const existingSnapshot = new Set(existingByFilial.keys());
+  const payload = deduped.map(({ filialKey, row }) => {
+    const id = existingByFilial.get(filialKey);
     return id ? { ...row, id } : row;
   });
 
   const { data, error } = await supabase
     .from("clientes_oem")
     .upsert(payload)
-    .select("id, empresa_codigo, filial_codigo, cnpj_cpf");
+    .select("id, filial_codigo");
 
   if (!error) {
     for (const saved of (data ?? []) as ExistingClienteRow[]) {
-      const codEmpresa = toNumber(saved.empresa_codigo);
       const codFilial = toNumber(saved.filial_codigo);
-      if (codEmpresa != null && codFilial != null) {
-        existingByKey.set(buildKey(codEmpresa, codFilial), saved.id);
-      }
-      const cnpj = typeof saved.cnpj_cpf === "string" ? saved.cnpj_cpf.replace(/\D/g, "") : "";
-      if (cnpj) existingByCnpj.set(cnpj, saved.id);
+      if (codFilial != null) existingByFilial.set(String(codFilial), saved.id);
     }
 
     let inserted = 0;
     let updated = 0;
-    for (const { key } of rows) {
-      if (existingSnapshot.has(key)) updated += 1;
+    for (const { filialKey } of deduped) {
+      if (existingSnapshot.has(filialKey)) updated += 1;
       else inserted += 1;
     }
     return { inserted, updated, falhas: 0 };
@@ -230,9 +229,8 @@ async function persistirLote(
   let updated = 0;
   let falhas = 0;
 
-  for (const { key, row } of rows) {
-    const cnpj = typeof row.cnpj_cpf === "string" ? row.cnpj_cpf.replace(/\D/g, "") : "";
-    const existingId = existingByKey.get(key) ?? (cnpj ? existingByCnpj.get(cnpj) : undefined);
+  for (const { filialKey, row } of deduped) {
+    const existingId = existingByFilial.get(filialKey);
 
     if (existingId) {
       const { error: updateError } = await supabase
@@ -242,7 +240,7 @@ async function persistirLote(
 
       if (updateError) {
         falhas += 1;
-        console.error(`[OEM import] falha ao atualizar ${key}:`, updateError.message);
+        console.error(`[OEM import] falha ao atualizar filial ${filialKey}:`, updateError.message);
         continue;
       }
       updated += 1;
@@ -252,25 +250,18 @@ async function persistirLote(
     const { data: insertedRow, error: insertError } = await supabase
       .from("clientes_oem")
       .insert(row)
-      .select("id, empresa_codigo, filial_codigo, cnpj_cpf")
+      .select("id, filial_codigo")
       .maybeSingle();
 
     if (insertError) {
       falhas += 1;
-      console.error(`[OEM import] falha ao inserir ${key}:`, insertError.message);
+      console.error(`[OEM import] falha ao inserir filial ${filialKey}:`, insertError.message);
       continue;
     }
 
-    const codEmpresa = toNumber(insertedRow?.empresa_codigo);
     const codFilial = toNumber(insertedRow?.filial_codigo);
-    if (insertedRow?.id && codEmpresa != null && codFilial != null) {
-      existingByKey.set(buildKey(codEmpresa, codFilial), insertedRow.id as string);
-    }
-    if (insertedRow?.id) {
-      const insertedCnpj = typeof insertedRow.cnpj_cpf === "string"
-        ? insertedRow.cnpj_cpf.replace(/\D/g, "")
-        : "";
-      if (insertedCnpj) existingByCnpj.set(insertedCnpj, insertedRow.id as string);
+    if (insertedRow?.id && codFilial != null) {
+      existingByFilial.set(String(codFilial), insertedRow.id as string);
     }
     inserted += 1;
   }
