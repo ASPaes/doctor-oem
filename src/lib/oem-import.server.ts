@@ -153,7 +153,7 @@ async function fetchLicenciamentosPagina(
   // 401 na listagem: renova o token uma única vez antes de propagar o erro.
   if (resp.status === 401 && holder.refresh) {
     console.warn(`[OEM import] 401 em listagem pagina=${pagina} — renovando token.`);
-    await holder.refresh();
+    await holder.refresh("401");
     resp = await fetch(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
@@ -488,9 +488,11 @@ export async function runBulkImportOem(
   escopo: "bulkSync" | "scheduledSync" | "manualSync",
 ): Promise<OemImportResult> {
   const { existingByFilial, offsets } = await carregarExistentes();
-  // Token novo no início + renovação automática dentro do loop em caso de 401.
-  const accessToken = await obterTokenOem(escopo);
-  const holder = criarTokenHolder(escopo, accessToken);
+  // Limpa qualquer estado local e força um login OAuth2 totalmente novo
+  // antes do primeiro micro-lote da carga.
+  const holder = criarTokenHolder(escopo);
+  holder.clear();
+  await holder.refresh?.("startup");
 
   try {
     const listed = await tentarListagemCompleta(holder, existingByFilial);
