@@ -3,6 +3,8 @@ import {
   fetchLicenciamentoOem,
   mapLicenciamentoToRow,
   obterTokenOem,
+  criarTokenHolder,
+  type TokenHolder,
 } from "@/lib/doctoroem.functions";
 
 type TabletCloudFilialResumo = {
@@ -139,14 +141,24 @@ function buildResumoFallback(
 }
 
 async function fetchLicenciamentosPagina(
-  accessToken: string,
+  holder: TokenHolder,
   pagina: number,
 ): Promise<TabletCloudListagemResponse> {
   const url = `${OEM_API_ORIGIN}/v1/licenciamento?pagina=${pagina}`;
-  const resp = await fetch(url, {
+  let resp = await fetch(url, {
     method: "GET",
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
   });
+
+  // 401 na listagem: renova o token uma única vez antes de propagar o erro.
+  if (resp.status === 401 && holder.refresh) {
+    console.warn(`[OEM import] 401 em listagem pagina=${pagina} — renovando token.`);
+    await holder.refresh();
+    resp = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
+    });
+  }
 
   if (!resp.ok) {
     const preview = await resp.text().catch(() => "");
@@ -280,6 +292,7 @@ async function persistirLote(
 }
 
 async function carregarCandidatosDaListagem(accessToken: string): Promise<Candidate[]> {
+async function carregarCandidatosDaListagem(holder: TokenHolder): Promise<Candidate[]> {
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
   let pagina = 1;
@@ -287,7 +300,7 @@ async function carregarCandidatosDaListagem(accessToken: string): Promise<Candid
   let totalRegistros = Number.POSITIVE_INFINITY;
 
   while (totalGruposLidos < totalRegistros) {
-    const response = await fetchLicenciamentosPagina(accessToken, pagina);
+    const response = await fetchLicenciamentosPagina(holder, pagina);
     const grupos = response.data ?? [];
     totalRegistros = response.totalRegistros ?? totalRegistros;
 
