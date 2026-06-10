@@ -38,6 +38,7 @@ type ExistingClienteRow = {
   id: string;
   empresa_codigo: string | number | null;
   filial_codigo: string | number | null;
+  cnpj_cpf?: string | null;
 };
 
 type Candidate = {
@@ -147,11 +148,12 @@ async function carregarExistentes() {
   const supabase = getDoctorOemAdmin();
   const { data, error } = await supabase
     .from("clientes_oem")
-    .select("id, empresa_codigo, filial_codigo");
+    .select("id, empresa_codigo, filial_codigo, cnpj_cpf");
 
   if (error) throw new Error(`clientes_oem (load): ${error.message}`);
 
   const existingByKey = new Map<string, string>();
+  const existingByCnpj = new Map<string, string>();
   const offsets: number[] = [];
 
   for (const row of (data ?? []) as ExistingClienteRow[]) {
@@ -159,22 +161,26 @@ async function carregarExistentes() {
     const codFilial = toNumber(row.filial_codigo);
     if (codEmpresa == null || codFilial == null) continue;
     existingByKey.set(buildKey(codEmpresa, codFilial), row.id);
+    const cnpj = typeof row.cnpj_cpf === "string" ? row.cnpj_cpf.replace(/\D/g, "") : "";
+    if (cnpj) existingByCnpj.set(cnpj, row.id);
     offsets.push(codFilial - codEmpresa);
   }
 
-  return { supabase, existingByKey, offsets };
+  return { supabase, existingByKey, existingByCnpj, offsets };
 }
 
 async function persistirLote(
   rows: PersistCandidate[],
   existingByKey: Map<string, string>,
+  existingByCnpj: Map<string, string>,
 ): Promise<{ inserted: number; updated: number; falhas: number }> {
   if (!rows.length) return { inserted: 0, updated: 0, falhas: 0 };
 
   const supabase = getDoctorOemAdmin();
   const existingSnapshot = new Set(existingByKey.keys());
   const payload = rows.map(({ key, row }) => {
-    const id = existingByKey.get(key);
+    const cnpj = typeof row.cnpj_cpf === "string" ? row.cnpj_cpf.replace(/\D/g, "") : "";
+    const id = existingByKey.get(key) ?? (cnpj ? existingByCnpj.get(cnpj) : undefined);
     return id ? { ...row, id } : row;
   });
 
@@ -190,6 +196,8 @@ async function persistirLote(
       if (codEmpresa != null && codFilial != null) {
         existingByKey.set(buildKey(codEmpresa, codFilial), saved.id);
       }
+      const cnpj = typeof saved.cnpj_cpf === "string" ? saved.cnpj_cpf.replace(/\D/g, "") : "";
+      if (cnpj) existingByCnpj.set(cnpj, saved.id);
     }
 
     let inserted = 0;
@@ -208,7 +216,8 @@ async function persistirLote(
   let falhas = 0;
 
   for (const { key, row } of rows) {
-    const existingId = existingByKey.get(key);
+    const cnpj = typeof row.cnpj_cpf === "string" ? row.cnpj_cpf.replace(/\D/g, "") : "";
+    const existingId = existingByKey.get(key) ?? (cnpj ? existingByCnpj.get(cnpj) : undefined);
 
     if (existingId) {
       const { error: updateError } = await supabase
@@ -241,6 +250,12 @@ async function persistirLote(
     const codFilial = toNumber(insertedRow?.filial_codigo);
     if (insertedRow?.id && codEmpresa != null && codFilial != null) {
       existingByKey.set(buildKey(codEmpresa, codFilial), insertedRow.id as string);
+    }
+    if (insertedRow?.id) {
+      const insertedCnpj = typeof insertedRow.cnpj_cpf === "string"
+        ? insertedRow.cnpj_cpf.replace(/\D/g, "")
+        : "";
+      if (insertedCnpj) existingByCnpj.set(insertedCnpj, insertedRow.id as string);
     }
     inserted += 1;
   }
@@ -290,6 +305,7 @@ async function importarCandidatos(
   accessToken: string,
   candidates: Candidate[],
   existingByKey: Map<string, string>,
+  existingByCnpj: Map<string, string>,
 ): Promise<{ inserted: number; updated: number; total: number; scanned: number; falhas: number }> {
   let inserted = 0;
   let updated = 0;
@@ -321,7 +337,7 @@ async function importarCandidatos(
     );
 
     const validRows = resolved.filter((item): item is PersistCandidate => item !== null);
-    const saved = await persistirLote(validRows, existingByKey);
+    const saved = await persistirLote(validRows, existingByKey, existingByCnpj);
 
     inserted += saved.inserted;
     updated += saved.updated;
@@ -342,12 +358,13 @@ async function importarCandidatos(
 async function tentarListagemCompleta(
   accessToken: string,
   existingByKey: Map<string, string>,
+  existingByCnpj: Map<string, string>,
 ): Promise<OemImportResult | null> {
   const candidates = await carregarCandidatosDaListagem(accessToken);
   if (!candidates.length) return null;
 
   console.log(`[OEM import] listagem geral detectada: ${candidates.length} filiais encontradas.`);
-  const result = await importarCandidatos(accessToken, candidates, existingByKey);
+  const result = await importarCandidatos(accessToken, candidates, existingByKey, existingByCnpj);
   return { ...result, origem: "listagem" };
 }
 
@@ -378,6 +395,7 @@ async function descobrirEmpresaPorVarredura(
 async function importarPorVarredura(
   accessToken: string,
   existingByKey: Map<string, string>,
+  existingByCnpj: Map<string, string>,
   offsets: number[],
 ): Promise<OemImportResult> {
   const inicio = parseEnvInt("OEM_COD_EMPRESA_INICIO", OEM_SCAN_START);
@@ -414,7 +432,7 @@ async function importarPorVarredura(
     );
     total += dedupedRows.length;
 
-    const saved = await persistirLote(dedupedRows, existingByKey);
+    const saved = await persistirLote(dedupedRows, existingByKey, existingByCnpj);
     inserted += saved.inserted;
     updated += saved.updated;
     falhas += saved.falhas;
@@ -434,11 +452,11 @@ async function importarPorVarredura(
 export async function runBulkImportOem(
   escopo: "bulkSync" | "scheduledSync" | "manualSync",
 ): Promise<OemImportResult> {
-  const { existingByKey, offsets } = await carregarExistentes();
+  const { existingByKey, existingByCnpj, offsets } = await carregarExistentes();
   const accessToken = await obterTokenOem(escopo);
 
   try {
-    const listed = await tentarListagemCompleta(accessToken, existingByKey);
+    const listed = await tentarListagemCompleta(accessToken, existingByKey, existingByCnpj);
     if (listed) return listed;
   } catch (error) {
     console.warn(
@@ -447,5 +465,5 @@ export async function runBulkImportOem(
     );
   }
 
-  return importarPorVarredura(accessToken, existingByKey, offsets);
+  return importarPorVarredura(accessToken, existingByKey, existingByCnpj, offsets);
 }
