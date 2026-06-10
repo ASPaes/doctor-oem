@@ -56,9 +56,11 @@ function statusBadge(status: string) {
 
 function formatDataHora(iso: string): { data: string; hora: string } {
   const d = new Date(iso);
+  // Fuso fixo para evitar divergência entre servidor (UTC) e navegador.
+  const timeZone = "America/Sao_Paulo";
   return {
-    data: d.toLocaleDateString("pt-BR"),
-    hora: d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+    data: d.toLocaleDateString("pt-BR", { timeZone }),
+    hora: d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone }),
   };
 }
 
