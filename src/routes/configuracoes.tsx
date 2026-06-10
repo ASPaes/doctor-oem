@@ -22,6 +22,10 @@ import { toast } from "sonner";
 const syncSettingsQueryOptions = queryOptions({
   queryKey: ["doctoroem", "sync-settings"],
   queryFn: () => getSyncSettings(),
+  // Atualiza os logs automaticamente a cada 5s para acompanhar
+  // execuções em andamento no servidor (cron ou manual).
+  refetchInterval: 5000,
+  refetchIntervalInBackground: true,
 });
 
 export const Route = createFileRoute("/configuracoes")({
@@ -65,7 +69,7 @@ function formatDataHora(iso: string): { data: string; hora: string } {
 }
 
 function ConfiguracoesPage() {
-  const { data: settings } = useSuspenseQuery(syncSettingsQueryOptions);
+  const { data: settings, refetch, isFetching } = useSuspenseQuery(syncSettingsQueryOptions);
   const queryClient = useQueryClient();
 
   const [intervalo, setIntervalo] = useState(settings.intervaloHoras);
@@ -188,10 +192,24 @@ function ConfiguracoesPage() {
       </div>
 
       <div className="glass-panel rounded-2xl p-6 max-w-5xl">
-        <p className="font-semibold mb-1">Logs de Execução</p>
-        <p className="text-xs text-muted-foreground mb-4">
-          Últimas 10 execuções da sincronização automática e manual.
-        </p>
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="font-semibold mb-1">Logs de Execução</p>
+            <p className="text-xs text-muted-foreground">
+              Últimas 10 execuções · atualização automática a cada 5 segundos.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+            Atualizar logs
+          </Button>
+        </div>
         {settings.logs.length === 0 ? (
           <p className="text-sm text-muted-foreground py-6 text-center">
             Nenhuma execução registrada ainda.
