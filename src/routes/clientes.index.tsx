@@ -66,6 +66,21 @@ function ClientesList() {
     );
   });
 
+  const totals = list.reduce(
+    (acc, c) => {
+      acc.filiais += c.filiaisAtivas;
+      acc.pdvs += c.qtdPdv;
+      acc.comandas += c.qtdComandas;
+      acc.usuarios += c.usuariosAdicionais;
+      acc.custo += c.custoMensal;
+      if (c.bloqueado) acc.bloqueados++;
+      else if (c.ativo) acc.ativos++;
+      else acc.inativos++;
+      return acc;
+    },
+    { filiais: 0, pdvs: 0, comandas: 0, usuarios: 0, custo: 0, ativos: 0, inativos: 0, bloqueados: 0 },
+  );
+
   return (
     <div className="p-6 lg:p-8 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
