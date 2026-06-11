@@ -21,23 +21,51 @@ function isTabelaAusente(message: string | undefined): boolean {
   return /does not exist|could not find the table|schema cache/i.test(message);
 }
 
-async function registrarLog(
+async function inserirLogProcessando(
   supabase: ReturnType<typeof getDoctorOemAdmin>,
   origem: "cron" | "manual",
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("oem_sync_logs")
+    .insert({
+      origem,
+      status: "processando",
+      clientes_atualizados: 0,
+      clientes_falha: 0,
+      total_clientes: 0,
+      duracao_ms: null,
+      mensagem: "Carga iniciada — aguardando conclusão em segundo plano.",
+    })
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[OEM scheduledSync] falha ao abrir log processando:", error.message);
+    return null;
+  }
+  return data?.id ? String(data.id) : null;
+}
+
+async function finalizarLog(
+  supabase: ReturnType<typeof getDoctorOemAdmin>,
+  origem: "cron" | "manual",
+  logId: string | null,
   result: SyncRunResult,
 ): Promise<void> {
-  const { error } = await supabase.from("oem_sync_logs").insert({
-    origem,
+  const payload = {
     status: result.status,
     clientes_atualizados: result.atualizados,
     clientes_falha: result.falhas,
     total_clientes: result.total,
     duracao_ms: result.duracaoMs,
     mensagem: result.mensagem,
-  });
-  if (error) {
-    console.error("[OEM scheduledSync] falha ao gravar log:", error.message);
+  };
+  if (logId) {
+    const { error } = await supabase.from("oem_sync_logs").update(payload).eq("id", logId);
+    if (error) console.error("[OEM scheduledSync] falha ao finalizar log:", error.message);
+    return;
   }
+  const { error } = await supabase.from("oem_sync_logs").insert({ origem, ...payload });
+  if (error) console.error("[OEM scheduledSync] falha ao gravar log:", error.message);
 }
 
 export async function runScheduledOemSync(
@@ -73,7 +101,7 @@ export async function runScheduledOemSync(
         duracaoMs: Date.now() - inicio,
         mensagem: "Sincronização em segundo plano desativada nas Configurações.",
       };
-      await registrarLog(supabase, origem, result);
+      await finalizarLog(supabase, origem, null, result);
       return result;
     }
 
@@ -102,6 +130,10 @@ export async function runScheduledOemSync(
     }
   }
 
+  // Abre IMEDIATAMENTE um log "processando" para que o front mostre o
+  // status enquanto a carga roda — sem isso o usuário acha que travou.
+  const logId = await inserirLogProcessando(supabase, origem);
+
   try {
     const importResult = await runBulkImportOem(origem === "cron" ? "scheduledSync" : "manualSync");
 
@@ -115,7 +147,7 @@ export async function runScheduledOemSync(
         `${importResult.inserted} novo(s), ${importResult.updated} atualizado(s), ` +
         `${importResult.falhas} falha(s), ${importResult.scanned} consulta(s) via ${importResult.origem}.`,
     };
-    await registrarLog(supabase, origem, result);
+    await finalizarLog(supabase, origem, logId, result);
     return result;
   } catch (e) {
     const result: SyncRunResult = {
@@ -126,7 +158,7 @@ export async function runScheduledOemSync(
       duracaoMs: Date.now() - inicio,
       mensagem: e instanceof Error ? e.message : String(e),
     };
-    await registrarLog(supabase, origem, result);
+    await finalizarLog(supabase, origem, logId, result);
     return result;
   }
 }
