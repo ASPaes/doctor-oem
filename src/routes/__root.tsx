@@ -4,10 +4,12 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
+  useNavigate,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -130,18 +132,60 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [authChecked, setAuthChecked] = useState(false);
+  const [hasUser, setHasUser] = useState(false);
 
   useEffect(() => {
+    let active = true;
+    supabase.auth.getUser().then(({ data }) => {
+      if (!active) return;
+      setHasUser(!!data.user);
+      setAuthChecked(true);
+    });
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
+        setHasUser(false);
         queryClient.clear();
-        window.location.href = "/auth";
+        navigate({ to: "/auth", replace: true });
       } else if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        setHasUser(true);
         queryClient.invalidateQueries();
       }
     });
-    return () => data.subscription.unsubscribe();
-  }, [queryClient]);
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
+  }, [queryClient, navigate]);
+
+  const isAuthRoute = pathname === "/auth";
+
+  useEffect(() => {
+    if (authChecked && !hasUser && !isAuthRoute) {
+      navigate({ to: "/auth", replace: true });
+    }
+  }, [authChecked, hasUser, isAuthRoute, navigate]);
+
+  if (isAuthRoute) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <Outlet />
+        <Toaster />
+      </QueryClientProvider>
+    );
+  }
+
+  if (!authChecked || !hasUser) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <div className="min-h-screen grid place-items-center text-sm text-muted-foreground">
+          Carregando…
+        </div>
+      </QueryClientProvider>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
