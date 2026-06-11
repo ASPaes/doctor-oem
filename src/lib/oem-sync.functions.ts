@@ -104,7 +104,16 @@ export const updateSyncSettings = createServerFn({ method: "POST" })
  * Pensada para ser chamada pela Cron Job (via /api/public/oem-sync) ou
  * manualmente pelo botão "Executar agora" na tela de Configurações.
  */
-export const scheduledOemSync = createServerFn({ method: "POST" }).handler(async () => {
-  const { runScheduledOemSync } = await import("@/lib/oem-sync.server");
-  return runScheduledOemSync("manual");
-});
+export const scheduledOemSync = createServerFn({ method: "POST" }).handler(
+  async (): Promise<{ ok: true; agendado: true }> => {
+    const { runScheduledOemSync } = await import("@/lib/oem-sync.server");
+    // Fire-and-forget: a carga total leva vários minutos e estoura o
+    // timeout do proxy se ficarmos aguardando. O motor já cria um log
+    // "processando" no início e atualiza no fim, então o front consegue
+    // acompanhar via auto-refresh.
+    void runScheduledOemSync("manual").catch((err) => {
+      console.error("[OEM scheduledOemSync] erro em background:", err);
+    });
+    return { ok: true, agendado: true };
+  },
+);
