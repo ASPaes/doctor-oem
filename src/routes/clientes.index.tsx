@@ -8,6 +8,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useRole } from "@/lib/role-context";
 import { toast } from "sonner";
 
@@ -35,6 +36,7 @@ export const Route = createFileRoute("/clientes/")({
 
 function ClientesList() {
   const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string[]>(["ativo", "inativo", "bloqueado"]);
   const { canSeeFinance } = useRole();
   const { data: clientes } = useSuspenseQuery(clientesQueryOptions);
   const queryClient = useQueryClient();
@@ -49,13 +51,19 @@ function ClientesList() {
     },
     onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
   });
-  const list = clientes.filter(
-    (c) =>
-      !q ||
-      c.nomeFantasia.toLowerCase().includes(q.toLowerCase()) ||
-      c.cnpj.includes(q) ||
-      c.grupoEconomico.toLowerCase().includes(q.toLowerCase()),
-  );
+  const term = q.trim().toLowerCase();
+  const list = clientes.filter((c) => {
+    const status = c.bloqueado ? "bloqueado" : c.ativo ? "ativo" : "inativo";
+    if (statusFilter.length > 0 && !statusFilter.includes(status)) return false;
+    if (!term) return true;
+    return (
+      c.nomeFantasia.toLowerCase().includes(term) ||
+      c.cnpj.includes(term) ||
+      c.grupoEconomico.toLowerCase().includes(term) ||
+      (c.codigoEmpresa ?? "").toLowerCase().includes(term) ||
+      (c.codigoFilial ?? "").toLowerCase().includes(term)
+    );
+  });
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
@@ -72,7 +80,7 @@ function ClientesList() {
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por nome, CNPJ ou grupo"
+            placeholder="Buscar por nome, CNPJ, grupo, cód. empresa ou filial"
             className="pl-9 glass-panel border-border"
           />
         </div>
@@ -84,6 +92,27 @@ function ClientesList() {
           <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? "animate-spin" : ""}`} />
           {syncMutation.isPending ? "Sincronizando…" : "Sincronizar Base de Clientes"}
         </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Status</span>
+        <ToggleGroup
+          type="multiple"
+          value={statusFilter}
+          onValueChange={setStatusFilter}
+          variant="outline"
+          size="sm"
+        >
+          <ToggleGroupItem value="ativo" aria-label="Mostrar ativos">
+            Ativo
+          </ToggleGroupItem>
+          <ToggleGroupItem value="inativo" aria-label="Mostrar inativos">
+            Inativo
+          </ToggleGroupItem>
+          <ToggleGroupItem value="bloqueado" aria-label="Mostrar bloqueados">
+            Bloqueado
+          </ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
