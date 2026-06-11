@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Search, Building2, RefreshCw } from "lucide-react";
+import { Search, RefreshCw } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { listClientes, bulkSyncClientes } from "@/lib/doctoroem.functions";
 import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
