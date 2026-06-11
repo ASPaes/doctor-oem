@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Search, RefreshCw } from "lucide-react";
+import { Search, RefreshCw, Store, Monitor, ClipboardList, Users, DollarSign, Activity } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { listClientes, bulkSyncClientes } from "@/lib/doctoroem.functions";
 import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Card, CardContent } from "@/components/ui/card";
 import { useRole } from "@/lib/role-context";
 import { toast } from "sonner";
 
@@ -65,6 +66,21 @@ function ClientesList() {
     );
   });
 
+  const totals = list.reduce(
+    (acc, c) => {
+      acc.filiais += c.filiaisAtivas;
+      acc.pdvs += c.qtdPdv;
+      acc.comandas += c.qtdComandas;
+      acc.usuarios += c.usuariosAdicionais;
+      acc.custo += c.custoMensal;
+      if (c.bloqueado) acc.bloqueados++;
+      else if (c.ativo) acc.ativos++;
+      else acc.inativos++;
+      return acc;
+    },
+    { filiais: 0, pdvs: 0, comandas: 0, usuarios: 0, custo: 0, ativos: 0, inativos: 0, bloqueados: 0 },
+  );
+
   return (
     <div className="p-6 lg:p-8 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -113,6 +129,66 @@ function ClientesList() {
             Bloqueado
           </ToggleGroupItem>
         </ToggleGroup>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <Activity className="h-5 w-5 text-muted-foreground mb-1" />
+            <span className="text-2xl font-bold">{list.length}</span>
+            <span className="text-xs text-muted-foreground">Clientes</span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <Store className="h-5 w-5 text-muted-foreground mb-1" />
+            <span className="text-2xl font-bold">{totals.filiais}</span>
+            <span className="text-xs text-muted-foreground">Filiais</span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <Monitor className="h-5 w-5 text-muted-foreground mb-1" />
+            <span className="text-2xl font-bold">{totals.pdvs}</span>
+            <span className="text-xs text-muted-foreground">PDVs</span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <ClipboardList className="h-5 w-5 text-muted-foreground mb-1" />
+            <span className="text-2xl font-bold">{totals.comandas}</span>
+            <span className="text-xs text-muted-foreground">Comandas</span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <Users className="h-5 w-5 text-muted-foreground mb-1" />
+            <span className="text-2xl font-bold">{totals.usuarios}</span>
+            <span className="text-xs text-muted-foreground">Usuários</span>
+          </CardContent>
+        </Card>
+        {canSeeFinance && (
+          <Card>
+            <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+              <DollarSign className="h-5 w-5 text-muted-foreground mb-1" />
+              <span className="text-2xl font-bold">{formatBRL(totals.custo)}</span>
+              <span className="text-xs text-muted-foreground">Custo Mensal</span>
+            </CardContent>
+          </Card>
+        )}
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center gap-1">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="border-success/40 text-success text-xs">{totals.ativos} Ativo</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="border-muted-foreground/30 text-muted-foreground text-xs">{totals.inativos} Inativo</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="border-destructive/50 text-destructive text-xs">{totals.bloqueados} Bloqueado</Badge>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="rounded-xl border bg-card shadow overflow-x-auto">
