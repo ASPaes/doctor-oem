@@ -1,9 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Plug, RefreshCw, Save, Clock } from "lucide-react";
-import { getSyncSettings, updateSyncSettings, scheduledOemSync } from "@/lib/oem-sync.functions";
+import { Plug, RefreshCw, Save, Clock, KeyRound, PlugZap, Zap } from "lucide-react";
+import {
+  getTenantSyncSettings,
+  updateTenantSyncSettings,
+  runTenantInitialLoad,
+  testTenantOemConnection,
+} from "@/lib/tenant-oem.functions";
+import { getTenantOemSettings, upsertTenantOemSettings } from "@/lib/tenant.functions";
+import { useTenant } from "@/lib/tenant-context";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -19,26 +26,17 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 
-const syncSettingsQueryOptions = queryOptions({
-  queryKey: ["doctoroem", "sync-settings"],
-  queryFn: () => getSyncSettings(),
-  // Atualiza os logs automaticamente a cada 5s para acompanhar
-  // execuções em andamento no servidor (cron ou manual).
-  refetchInterval: 5000,
-  refetchIntervalInBackground: true,
-});
-
 export const Route = createFileRoute("/configuracoes")({
   head: () => ({
     meta: [
       { title: "Configurações · Nexus Hub" },
       {
         name: "description",
-        content: "Controle da sincronização automática com o OEM da TabletCloud e logs de execução.",
+        content:
+          "Credenciais OEM por empresa, controle da sincronização automática e logs de execução.",
       },
     ],
   }),
-  loader: ({ context }) => context.queryClient.ensureQueryData(syncSettingsQueryOptions),
   component: ConfiguracoesPage,
   pendingComponent: () => (
     <div className="p-10 text-center text-muted-foreground">Carregando configurações…</div>
@@ -69,38 +67,127 @@ function formatDataHora(iso: string): { data: string; hora: string } {
 }
 
 function ConfiguracoesPage() {
-  const { data: settings, refetch, isFetching } = useSuspenseQuery(syncSettingsQueryOptions);
+  const { activeTenant, loading: tenantLoading } = useTenant();
   const queryClient = useQueryClient();
 
-  const [intervalo, setIntervalo] = useState(settings.intervaloHoras);
-  const [ativo, setAtivo] = useState(settings.ativo);
+  const getSync = useServerFn(getTenantSyncSettings);
+  const updateSync = useServerFn(updateTenantSyncSettings);
+  const runLoad = useServerFn(runTenantInitialLoad);
+  const getCreds = useServerFn(getTenantOemSettings);
+  const saveCreds = useServerFn(upsertTenantOemSettings);
+  const testConn = useServerFn(testTenantOemConnection);
+
+  const tenantId = activeTenant?.id ?? null;
+
+  const { data: settings, refetch, isFetching } = useQuery({
+    queryKey: ["tenant-sync", tenantId],
+    queryFn: () => getSync({ data: { tenantId: tenantId! } }),
+    enabled: !!tenantId,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+  });
+
+  const { data: creds, isLoading: credsLoading } = useQuery({
+    queryKey: ["tenant-oem-creds", tenantId],
+    queryFn: () => getCreds({ data: { tenantId: tenantId! } }),
+    enabled: !!tenantId,
+  });
+
+  const [intervalo, setIntervalo] = useState(24);
+  const [ativo, setAtivo] = useState(true);
 
   useEffect(() => {
-    setIntervalo(settings.intervaloHoras);
-    setAtivo(settings.ativo);
-  }, [settings.intervaloHoras, settings.ativo]);
+    if (settings) {
+      setIntervalo(settings.intervaloHoras);
+      setAtivo(settings.ativo);
+    }
+  }, [settings]);
 
-  const salvarFn = useServerFn(updateSyncSettings);
+  const [credForm, setCredForm] = useState({
+    oem_api_base_url: "https://api.pdvlegal.com.br",
+    oem_api_username: "",
+    oem_api_password: "",
+    oem_client_id: "",
+    oem_client_secret: "",
+  });
+  const [credLoaded, setCredLoaded] = useState<string | null>(null);
+  useEffect(() => {
+    if (creds && credLoaded !== tenantId) {
+      setCredForm({
+        oem_api_base_url: creds.oem_api_base_url ?? "https://api.pdvlegal.com.br",
+        oem_api_username: creds.oem_api_username ?? "",
+        oem_api_password: creds.oem_api_password ?? "",
+        oem_client_id: creds.oem_client_id ?? "",
+        oem_client_secret: creds.oem_client_secret ?? "",
+      });
+      setCredLoaded(tenantId);
+    }
+  }, [creds, tenantId, credLoaded]);
+
   const salvarMutation = useMutation({
-    mutationFn: () => salvarFn({ data: { intervaloHoras: intervalo, ativo } }),
+    mutationFn: () => updateSync({ data: { tenantId: tenantId!, intervaloHoras: intervalo, ativo } }),
     onSuccess: () => {
-      toast.success("Configurações da sincronização salvas com sucesso.");
-      queryClient.invalidateQueries({ queryKey: ["doctoroem", "sync-settings"] });
+      toast.success("Configurações salvas.");
+      queryClient.invalidateQueries({ queryKey: ["tenant-sync", tenantId] });
     },
     onError: (err: Error) => toast.error(`Falha ao salvar: ${err.message}`),
   });
 
-  const executarFn = useServerFn(scheduledOemSync);
   const executarMutation = useMutation({
-    mutationFn: () => executarFn(),
+    mutationFn: () => runLoad({ data: { tenantId: tenantId!, origem: "manual" } }),
     onSuccess: () => {
       toast.success(
-        "Carga disparada! Rodando em segundo plano — acompanhe o status saindo de 'processando' para 'sucesso' na tabela de logs abaixo.",
+        "Sincronização disparada — rodando em segundo plano. Acompanhe os logs abaixo.",
       );
-      queryClient.invalidateQueries({ queryKey: ["doctoroem"] });
+      queryClient.invalidateQueries({ queryKey: ["tenant-sync", tenantId] });
     },
     onError: (err: Error) => toast.error(`Falha na sincronização: ${err.message}`),
   });
+
+  const salvarCredsMutation = useMutation({
+    mutationFn: () =>
+      saveCreds({
+        data: {
+          tenant_id: tenantId!,
+          oem_api_base_url: credForm.oem_api_base_url || null,
+          oem_api_username: credForm.oem_api_username || null,
+          oem_api_password: credForm.oem_api_password || null,
+          oem_client_id: credForm.oem_client_id || null,
+          oem_client_secret: credForm.oem_client_secret || null,
+        },
+      }),
+    onSuccess: () => {
+      toast.success("Credenciais salvas.");
+      queryClient.invalidateQueries({ queryKey: ["tenant-oem-creds", tenantId] });
+    },
+    onError: (err: Error) => toast.error(`Falha: ${err.message}`),
+  });
+
+  const testarMutation = useMutation({
+    mutationFn: async () => {
+      // garante que o que está na tela esteja salvo antes do teste
+      await saveCreds({
+        data: {
+          tenant_id: tenantId!,
+          oem_api_base_url: credForm.oem_api_base_url || null,
+          oem_api_username: credForm.oem_api_username || null,
+          oem_api_password: credForm.oem_api_password || null,
+          oem_client_id: credForm.oem_client_id || null,
+          oem_client_secret: credForm.oem_client_secret || null,
+        },
+      });
+      return testConn({ data: { tenantId: tenantId! } });
+    },
+    onSuccess: (r) => {
+      if (r.ok) toast.success("Conexão OK — token OAuth2 obtido.");
+      else toast.error(`Falha na conexão: ${r.mensagem}`);
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  if (tenantLoading || !tenantId) {
+    return <div className="p-10 text-center text-muted-foreground">Selecione uma empresa…</div>;
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
@@ -108,20 +195,100 @@ function ConfiguracoesPage() {
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Integrações</p>
         <h1 className="text-3xl font-semibold text-gradient">Configurações</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Automação da sincronização com o OEM da TabletCloud.
+          Empresa ativa: <strong>{activeTenant?.nome}</strong> — credenciais e sincronização isoladas por empresa.
         </p>
       </div>
 
-      {!settings.tabelasProntas && (
-        <div className="glass-panel rounded-2xl border border-destructive/40 p-5 text-sm">
-          <p className="font-semibold text-destructive">Tabelas de controle ausentes</p>
-          <p className="mt-1 text-muted-foreground">
-            As tabelas <code>oem_sync_config</code> e <code>oem_sync_logs</code> ainda não existem
-            no banco. Rode o SQL de criação (enviado no chat) no editor SQL do projeto para ativar
-            a automação e os logs.
-          </p>
+      {/* ===== Credenciais OEM por empresa ===== */}
+      <div className="glass-panel rounded-2xl p-6 space-y-4 max-w-3xl">
+        <div className="flex items-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-xl bg-[image:var(--gradient-primary)] text-primary-foreground">
+            <KeyRound className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-semibold leading-tight">Credenciais da API OEM</p>
+            <p className="text-xs text-muted-foreground">
+              OAuth2 (password grant) — usados pela sincronização desta empresa.
+            </p>
+          </div>
         </div>
-      )}
+        {credsLoading ? (
+          <p className="text-sm text-muted-foreground">Carregando credenciais…</p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>URL base da API</Label>
+              <Input
+                value={credForm.oem_api_base_url}
+                onChange={(e) => setCredForm({ ...credForm, oem_api_base_url: e.target.value })}
+                placeholder="https://api.pdvlegal.com.br"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Usuário (username)</Label>
+              <Input
+                value={credForm.oem_api_username}
+                onChange={(e) => setCredForm({ ...credForm, oem_api_username: e.target.value })}
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Senha (password)</Label>
+              <Input
+                type="password"
+                value={credForm.oem_api_password}
+                onChange={(e) => setCredForm({ ...credForm, oem_api_password: e.target.value })}
+                autoComplete="new-password"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Client ID</Label>
+              <Input
+                value={credForm.oem_client_id}
+                onChange={(e) => setCredForm({ ...credForm, oem_client_id: e.target.value })}
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Client Secret</Label>
+              <Input
+                type="password"
+                value={credForm.oem_client_secret}
+                onChange={(e) => setCredForm({ ...credForm, oem_client_secret: e.target.value })}
+                autoComplete="new-password"
+              />
+            </div>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-3 border-t border-border pt-4">
+          <Button
+            onClick={() => salvarCredsMutation.mutate()}
+            disabled={salvarCredsMutation.isPending}
+            className="gap-2"
+          >
+            <Save className="h-4 w-4" />
+            {salvarCredsMutation.isPending ? "Salvando…" : "Salvar credenciais"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => testarMutation.mutate()}
+            disabled={testarMutation.isPending}
+            className="gap-2"
+          >
+            <PlugZap className={`h-4 w-4 ${testarMutation.isPending ? "animate-pulse" : ""}`} />
+            {testarMutation.isPending ? "Testando…" : "Testar conexão"}
+          </Button>
+          <Button
+            variant="default"
+            onClick={() => executarMutation.mutate()}
+            disabled={executarMutation.isPending}
+            className="gap-2"
+          >
+            <Zap className="h-4 w-4" />
+            {executarMutation.isPending ? "Disparando…" : "Carga inicial / sincronizar agora"}
+          </Button>
+        </div>
+      </div>
 
       <div className="glass-panel rounded-2xl p-6 space-y-6 max-w-3xl">
         <div className="flex items-center gap-3">
@@ -129,9 +296,9 @@ function ConfiguracoesPage() {
             <Plug className="h-5 w-5" />
           </div>
           <div>
-            <p className="font-semibold leading-tight">OEM TabletCloud</p>
+            <p className="font-semibold leading-tight">Automação da sincronização</p>
             <p className="text-xs text-muted-foreground">
-              Sincronização automática de módulos, custos e licenças.
+              Frequência e ativação da sincronização em segundo plano.
             </p>
           </div>
         </div>
@@ -162,29 +329,17 @@ function ConfiguracoesPage() {
                 {ativo ? "Automação ativada" : "Automação desativada"}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Quando ativada, a Cron Job atualiza toda a base em lotes de 20 clientes.
-            </p>
           </div>
         </div>
 
         <div className="flex flex-wrap gap-3 border-t border-border pt-4">
           <Button
             onClick={() => salvarMutation.mutate()}
-            disabled={salvarMutation.isPending || !settings.tabelasProntas}
+            disabled={salvarMutation.isPending}
             className="gap-2"
           >
             <Save className="h-4 w-4" />
             {salvarMutation.isPending ? "Salvando…" : "Salvar configurações"}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => executarMutation.mutate()}
-            disabled={executarMutation.isPending}
-            className="gap-2"
-          >
-            <RefreshCw className={`h-4 w-4 ${executarMutation.isPending ? "animate-spin" : ""}`} />
-            {executarMutation.isPending ? "Sincronizando toda a base…" : "Executar sincronização agora"}
           </Button>
         </div>
       </div>
@@ -208,7 +363,7 @@ function ConfiguracoesPage() {
             Atualizar logs
           </Button>
         </div>
-        {settings.logs.length === 0 ? (
+        {!settings || settings.logs.length === 0 ? (
           <p className="text-sm text-muted-foreground py-6 text-center">
             Nenhuma execução registrada ainda.
           </p>
