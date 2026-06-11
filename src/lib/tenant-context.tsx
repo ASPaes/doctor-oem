@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { listMyTenants, setActiveTenant, type AllowedTenant } from "./tenant.functions";
@@ -17,10 +17,14 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   const list = useServerFn(listMyTenants);
   const setActive = useServerFn(setActiveTenant);
   const qc = useQueryClient();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const { data, isLoading } = useQuery({
     queryKey: ["my-tenants"],
     queryFn: () => list(),
     staleTime: 30_000,
+    enabled: mounted,
+    retry: false,
   });
   const [optimistic, setOptimistic] = useState<string | null>(null);
 
