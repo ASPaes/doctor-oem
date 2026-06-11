@@ -15,6 +15,11 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { RoleProvider } from "@/lib/role-context";
 import { RoleSwitcher } from "@/components/role-switcher";
+import { TenantProvider } from "@/lib/tenant-context";
+import { TenantSwitcher } from "@/components/tenant-switcher";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { Search, Bell } from "lucide-react";
 
@@ -126,10 +131,23 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        queryClient.clear();
+        window.location.href = "/auth";
+      } else if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        queryClient.invalidateQueries();
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [queryClient]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <RoleProvider>
-        <SidebarProvider>
+        <TenantProvider>
+          <SidebarProvider>
           <div className="min-h-screen flex w-full">
             <AppSidebar />
             <div className="flex-1 flex flex-col min-w-0">
@@ -146,7 +164,18 @@ function RootComponent() {
                   <button className="hidden sm:grid h-9 w-9 place-items-center rounded-full border border-border text-muted-foreground hover:text-foreground transition">
                     <Bell className="h-4 w-4" />
                   </button>
+                  <TenantSwitcher />
                   <RoleSwitcher />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={async () => {
+                      await supabase.auth.signOut();
+                    }}
+                    title="Sair"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
                 </div>
               </header>
               <main className="flex-1">
@@ -155,7 +184,8 @@ function RootComponent() {
             </div>
           </div>
           <Toaster />
-        </SidebarProvider>
+          </SidebarProvider>
+        </TenantProvider>
       </RoleProvider>
     </QueryClientProvider>
   );
