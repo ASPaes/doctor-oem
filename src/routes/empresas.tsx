@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
@@ -41,9 +41,13 @@ export const Route = createFileRoute("/empresas")({
 function EmpresasPage() {
   const qc = useQueryClient();
   const list = useServerFn(listAllTenants);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const { data: empresas, isLoading } = useQuery({
     queryKey: ["empresas", "all"],
     queryFn: () => list(),
+    enabled: mounted,
+    retry: false,
   });
   const create = useServerFn(createTenant);
   const update = useServerFn(updateTenant);
