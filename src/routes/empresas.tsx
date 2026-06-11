@@ -26,11 +26,6 @@ import {
 import { toast } from "sonner";
 import { Plus, Settings as SettingsIcon } from "lucide-react";
 
-const tenantsQuery = queryOptions({
-  queryKey: ["empresas", "all"],
-  queryFn: () => listAllTenants(),
-});
-
 export const Route = createFileRoute("/empresas")({
   head: () => ({
     meta: [
@@ -38,16 +33,18 @@ export const Route = createFileRoute("/empresas")({
       { name: "description", content: "Cadastro de empresas (tenants) e configurações OEM por tenant." },
     ],
   }),
-  loader: ({ context }) => context.queryClient.ensureQueryData(tenantsQuery),
   component: EmpresasPage,
-  pendingComponent: () => <div className="p-10 text-center text-muted-foreground">Carregando empresas…</div>,
   errorComponent: ({ error }) => <div className="p-10 text-center text-destructive">{error.message}</div>,
   notFoundComponent: () => <div className="p-10 text-center text-muted-foreground">Página não encontrada.</div>,
 });
 
 function EmpresasPage() {
-  const { data: empresas } = useSuspenseQuery(tenantsQuery);
   const qc = useQueryClient();
+  const list = useServerFn(listAllTenants);
+  const { data: empresas, isLoading } = useQuery({
+    queryKey: ["empresas", "all"],
+    queryFn: () => list(),
+  });
   const create = useServerFn(createTenant);
   const update = useServerFn(updateTenant);
 
@@ -118,7 +115,8 @@ function EmpresasPage() {
       </div>
 
       <div className="grid gap-3">
-        {empresas.map((e) => (
+        {isLoading && <p className="text-sm text-muted-foreground">Carregando…</p>}
+        {(empresas ?? []).map((e) => (
           <Card key={e.id}>
             <CardContent className="p-4 flex flex-wrap items-center gap-4">
               <div className="flex-1 min-w-[200px]">
@@ -140,7 +138,7 @@ function EmpresasPage() {
             </CardContent>
           </Card>
         ))}
-        {empresas.length === 0 && (
+        {empresas && empresas.length === 0 && (
           <div className="p-8 text-center text-sm text-muted-foreground">
             Nenhuma empresa cadastrada ainda.
           </div>
