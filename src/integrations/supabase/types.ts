@@ -14,6 +14,171 @@ export type Database = {
   }
   public: {
     Tables: {
+      clientes_oem: {
+        Row: {
+          bloqueado: boolean | null
+          cnpj_cpf: string
+          created_at: string
+          custo_total: number | null
+          empresa_codigo: string | null
+          filial_codigo: string | null
+          grupo_economico: string | null
+          id: string
+          last_sync: string | null
+          licencas_detalhe: Json | null
+          modulos_ativos: Json | null
+          motivo_bloqueio: string | null
+          nome_fantasia: string
+          numero_filiais: number | null
+          produto_principal: string | null
+          qtd_comandas: number | null
+          qtd_pdv: number | null
+          qtd_pdv_comandas: number | null
+          razao_social: string | null
+          status: string | null
+          tenant_id: string
+          updated_at: string
+          usuarios_adicionais: number | null
+        }
+        Insert: {
+          bloqueado?: boolean | null
+          cnpj_cpf?: string
+          created_at?: string
+          custo_total?: number | null
+          empresa_codigo?: string | null
+          filial_codigo?: string | null
+          grupo_economico?: string | null
+          id?: string
+          last_sync?: string | null
+          licencas_detalhe?: Json | null
+          modulos_ativos?: Json | null
+          motivo_bloqueio?: string | null
+          nome_fantasia: string
+          numero_filiais?: number | null
+          produto_principal?: string | null
+          qtd_comandas?: number | null
+          qtd_pdv?: number | null
+          qtd_pdv_comandas?: number | null
+          razao_social?: string | null
+          status?: string | null
+          tenant_id: string
+          updated_at?: string
+          usuarios_adicionais?: number | null
+        }
+        Update: {
+          bloqueado?: boolean | null
+          cnpj_cpf?: string
+          created_at?: string
+          custo_total?: number | null
+          empresa_codigo?: string | null
+          filial_codigo?: string | null
+          grupo_economico?: string | null
+          id?: string
+          last_sync?: string | null
+          licencas_detalhe?: Json | null
+          modulos_ativos?: Json | null
+          motivo_bloqueio?: string | null
+          nome_fantasia?: string
+          numero_filiais?: number | null
+          produto_principal?: string | null
+          qtd_comandas?: number | null
+          qtd_pdv?: number | null
+          qtd_pdv_comandas?: number | null
+          razao_social?: string | null
+          status?: string | null
+          tenant_id?: string
+          updated_at?: string
+          usuarios_adicionais?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "clientes_oem_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      oem_sync_config: {
+        Row: {
+          ativo: boolean
+          created_at: string
+          intervalo_horas: number
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          ativo?: boolean
+          created_at?: string
+          intervalo_horas?: number
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          ativo?: boolean
+          created_at?: string
+          intervalo_horas?: number
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oem_sync_config_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      oem_sync_logs: {
+        Row: {
+          clientes_atualizados: number
+          clientes_falha: number
+          duracao_ms: number | null
+          executado_em: string
+          id: string
+          mensagem: string | null
+          origem: string
+          status: string
+          tenant_id: string
+          total_clientes: number
+        }
+        Insert: {
+          clientes_atualizados?: number
+          clientes_falha?: number
+          duracao_ms?: number | null
+          executado_em?: string
+          id?: string
+          mensagem?: string | null
+          origem: string
+          status: string
+          tenant_id: string
+          total_clientes?: number
+        }
+        Update: {
+          clientes_atualizados?: number
+          clientes_falha?: number
+          duracao_ms?: number | null
+          executado_em?: string
+          id?: string
+          mensagem?: string | null
+          origem?: string
+          status?: string
+          tenant_id?: string
+          total_clientes?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oem_sync_logs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenant_members: {
         Row: {
           created_at: string
@@ -51,6 +216,12 @@ export type Database = {
           doctoroem_publishable_secret_name: string | null
           doctoroem_service_secret_name: string | null
           doctoroem_url: string | null
+          oem_api_base_url: string | null
+          oem_api_method: string | null
+          oem_api_password: string | null
+          oem_api_username: string | null
+          oem_client_id: string | null
+          oem_client_secret: string | null
           tabletcloud_token_secret_name: string | null
           tabletcloud_url: string | null
           tenant_id: string
@@ -60,6 +231,12 @@ export type Database = {
           doctoroem_publishable_secret_name?: string | null
           doctoroem_service_secret_name?: string | null
           doctoroem_url?: string | null
+          oem_api_base_url?: string | null
+          oem_api_method?: string | null
+          oem_api_password?: string | null
+          oem_api_username?: string | null
+          oem_client_id?: string | null
+          oem_client_secret?: string | null
           tabletcloud_token_secret_name?: string | null
           tabletcloud_url?: string | null
           tenant_id: string
@@ -69,6 +246,12 @@ export type Database = {
           doctoroem_publishable_secret_name?: string | null
           doctoroem_service_secret_name?: string | null
           doctoroem_url?: string | null
+          oem_api_base_url?: string | null
+          oem_api_method?: string | null
+          oem_api_password?: string | null
+          oem_api_username?: string | null
+          oem_client_id?: string | null
+          oem_client_secret?: string | null
           tabletcloud_token_secret_name?: string | null
           tabletcloud_url?: string | null
           tenant_id?: string

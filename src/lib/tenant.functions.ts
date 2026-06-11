@@ -176,6 +176,12 @@ export const upsertTenantOemSettings = createServerFn({ method: "POST" })
         doctoroem_service_secret_name: z.string().max(120).nullable().optional(),
         tabletcloud_url: z.string().url().nullable().optional(),
         tabletcloud_token_secret_name: z.string().max(120).nullable().optional(),
+        oem_api_base_url: z.string().url().nullable().optional(),
+        oem_api_username: z.string().max(200).nullable().optional(),
+        oem_api_password: z.string().max(200).nullable().optional(),
+        oem_client_id: z.string().max(200).nullable().optional(),
+        oem_client_secret: z.string().max(200).nullable().optional(),
+        oem_api_method: z.string().max(40).nullable().optional(),
       })
       .parse(d),
   )

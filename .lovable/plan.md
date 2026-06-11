@@ -1,70 +1,96 @@
-## Objetivo
 
-Transformar o Nexus Hub em multi-tenant: cada empresa (tenant) é 100% isolada. Você (super-admin) alterna entre empresas via um seletor no topo; usuários comuns enxergam apenas a sua empresa. Hoje tudo aponta para o DoctorOEM da Digi Office — vamos centralizar no Lovable Cloud e tratar a Digi Office como o primeiro tenant.
+## Decisão arquitetural (precisa antes do código)
 
-## Arquitetura
+Hoje os dados operacionais (`clientes_oem`, `oem_sync_config`, `oem_sync_logs`) vivem em um banco **externo** (projeto DoctorOEM, fora do Lovable Cloud). A tela /empresas já permite apontar uma URL DoctorOEM diferente por tenant, mas isso só funciona se **cada empresa tiver seu próprio projeto Supabase externo** — o que não combina com "basta preencher 4 campos e sincronizar".
+
+Para o fluxo que você descreveu funcionar de verdade ("cadastrou empresa → preencheu user/pass/client_id/client_secret → carga inicial puxa tudo automaticamente"), os dados precisam estar **no Lovable Cloud central, com `tenant_id` em cada linha**. Esse é o modelo multi-tenant correto.
+
+Plano abaixo assume essa migração. Se preferir manter um Supabase externo por empresa, o caminho muda bastante.
+
+## O que será feito
+
+### 1. Migração de schema (no Cloud central)
+
+Criar no Cloud central as tabelas que hoje só existem no banco externo:
+- `clientes_oem` — todas as colunas atuais + `tenant_id uuid not null references tenants(id)`
+- `oem_sync_config` — config de automação, com `tenant_id` (singleton por tenant)
+- `oem_sync_logs` — logs de execução, com `tenant_id`
+
+Estender `tenant_oem_settings` adicionando colunas:
+- `oem_api_base_url text` (default `https://api.pdvlegal.com.br`)
+- `oem_api_username text`
+- `oem_api_password text`
+- `oem_client_id text`
+- `oem_client_secret text`
+- `oem_api_method text` (default `password`)
+
+RLS em todas:
+- SELECT: `has_tenant_access(auth.uid(), tenant_id)`
+- INSERT/UPDATE/DELETE de clientes_oem/logs: bloqueado para usuários (só edge/server admin escreve)
+- Config: `is_tenant_admin`
+- Credenciais OEM em `tenant_oem_settings`: já restritas a admin do tenant + super_admin (mantém)
+
+Índice único `(tenant_id, filial_codigo)` para o upsert da sincronização.
+
+### 2. Refatorar o motor de sincronização
+
+- `oem-import.server.ts` e `oem-sync.server.ts` deixam de ler `process.env.OEM_*` e passam a receber um `tenantId`, carregando as credenciais de `tenant_oem_settings` via `supabaseAdmin` central.
+- Todas as queries em `clientes_oem` ganham filtro `.eq("tenant_id", tenantId)`.
+- O upsert usa `onConflict: "tenant_id,filial_codigo"`.
+- `doctoroem.functions.ts` (listClientes/getCliente/forceSync) lê o `active_tenant_id` do cookie e injeta o filtro de tenant + usa as credenciais do tenant ativo.
+- O endpoint público `/api/public/oem-sync` (cron) passa a iterar **todos os tenants ativos com credenciais preenchidas** e roda a sincronização para cada um.
+
+### 3. Tela /configuracoes
+
+Mostra a config **do tenant ativo** (lido do contexto). Adicionar uma seção "Credenciais OEM" com:
+- Base URL da API OEM (default preenchido)
+- Username
+- Password (input `type="password"`)
+- Client ID
+- Client Secret (input `type="password"`)
+- Botão "Testar conexão" — chama uma server fn que tenta o OAuth2 e retorna sucesso/erro
+- Botão "Salvar credenciais"
+
+Os campos de intervalo/automação e a tabela de logs também passam a ser por tenant.
+
+### 4. Tela /empresas — botão "Carga inicial"
+
+Em cada card de empresa adicionar botão **"Carga inicial"** (visível só para super_admin), que:
+- Valida que credenciais OEM estão preenchidas
+- Dispara `runScheduledOemSync({ tenantId, origem: "manual" })` em background
+- Mostra toast "Carga iniciada — acompanhe em Configurações"
+
+### 5. Limpeza
+
+- Remover referência aos env vars `OEM_*` no código (mantém os secrets no painel só como histórico — não apagar para não quebrar nada acidentalmente)
+- O cliente externo `doctoroem-admin.server.ts` continua existindo só para a função de migração inicial (uma vez), depois pode ser removido em fase posterior.
+
+## Detalhes técnicos
 
 ```text
-Lovable Cloud (Supabase central)
-├── auth.users                       (login email/senha)
-├── tenants                          (empresas cadastradas)
-├── tenant_members (user_id, tenant_id, role)
-├── user_roles (user_id, role: super_admin)
-├── tenant_oem_settings (URL/keys do DoctorOEM por tenant)
-├── tenant_clientes / tenant_sync_logs / ...  (dados operacionais)
-└── RLS: tudo filtrado por tenant_id via has_tenant_access()
+tenant_oem_settings (ampliada)
+├── tenant_id (PK)
+├── oem_api_base_url
+├── oem_api_username
+├── oem_api_password         ← novo, texto plano no DB (protegido por RLS)
+├── oem_client_id            ← novo
+├── oem_client_secret        ← novo
+└── oem_api_method (default 'password')
+
+clientes_oem
+├── tenant_id (FK → tenants)
+├── empresa_codigo, filial_codigo
+├── (todas as outras colunas atuais)
+└── UNIQUE (tenant_id, filial_codigo)
 ```
 
-Super-admin (você) bypassa o filtro de tenant_id; usuários normais só veem o tenant_id ao qual pertencem.
+Sobre segurança: as credenciais ficam em texto plano no banco, protegidas por RLS — só super_admin e admin do tenant conseguem ler/escrever. É o trade-off pedido ("basta preencher e sincronizar"). Se depois quiser endurecer, dá para mover para pgsodium/vault sem mudar a UI.
 
-## Etapas
+## Ordem de execução
 
-### 1. Habilitar Lovable Cloud + auth
-- Habilitar Cloud, criar página `/auth` (email/senha), proteger rotas com `_authenticated/route.tsx` gerenciado.
-- Criar enum `app_role` (`super_admin`, `admin`, `member`) e tabela `user_roles` + função `has_role()` (security definer).
-
-### 2. Schema multi-tenant
-- `tenants`: id, nome, slug, cnpj, ativo, created_at.
-- `tenant_members`: user_id, tenant_id, role no tenant (admin/financeiro/suporte) — substitui o `role-context` atual.
-- `tenant_oem_settings`: tenant_id, doctoroem_url, doctoroem_publishable_key, doctoroem_service_key (criptografado / referenciado por segredo), tabletcloud_url, tabletcloud_token.
-- Função `has_tenant_access(_user, _tenant)` security definer.
-- RLS em todas as tabelas: `super_admin` vê tudo, demais só seu tenant.
-- Seed: criar tenant "Digi Office" com as credenciais atuais (`DOCTOROEM_*`).
-
-### 3. Migrar tabelas operacionais para o Cloud
-- Replicar as tabelas hoje existentes no DoctorOEM (clientes, módulos, licenças, sync_logs, etc.) no Cloud com coluna `tenant_id NOT NULL`.
-- Reescrever `src/lib/doctoroem.functions.ts` e `oem-sync.*` para:
-  - Receber `tenant_id` do contexto (server-fn middleware).
-  - Buscar credenciais OEM em `tenant_oem_settings` daquele tenant.
-  - Gravar resultado em tabelas do Cloud com `tenant_id`.
-
-### 4. Contexto de tenant no app
-- `tenant-context.tsx`: provider + hook `useTenant()` (substitui parcialmente o role-context).
-- `TenantSwitcher` no header (ao lado do RoleSwitcher) — lista tenants visíveis ao usuário (todos se super_admin).
-- Persistir tenant ativo em cookie httpOnly server-side (ou localStorage + validação server-side a cada chamada).
-- Middleware `requireTenant` em todas as server fns: lê cookie, valida `has_tenant_access`, injeta `tenantId` no context.
-
-### 5. Telas
-- Nova rota `/empresas` (só super_admin): CRUD de tenants + edição das credenciais OEM/TabletCloud por empresa.
-- `/configuracoes`: passa a editar apenas configs do tenant ativo.
-- `/usuarios`: gerencia membros do tenant ativo (super_admin pode convidar/remover; admin do tenant idem dentro do seu).
-- Todas as outras telas (clientes, gateway, overview) continuam iguais visualmente, mas todas as queries passam pelo tenant ativo automaticamente.
-
-### 6. Sign-in / sign-up
-- `/auth`: email + senha. Primeiro usuário cadastrado é promovido a `super_admin` (você).
-- Convite de membros via super_admin/admin do tenant (cria conta e vincula em `tenant_members`).
-
-## Pontos técnicos sensíveis
-
-- **Service role do DoctorOEM por tenant**: o ideal é guardar em `secrets` do Cloud (um por tenant, ex.: `OEM_SERVICE_KEY_<tenant_slug>`) e a tabela `tenant_oem_settings` referencia o nome do segredo. Isso evita armazenar chave em texto plano no banco.
-- **RLS em tudo**: cada tabela operacional ganha policy `tenant_id IN (SELECT tenant_id FROM tenant_members WHERE user_id = auth.uid()) OR has_role(auth.uid(),'super_admin')`.
-- **Cookie de tenant ativo**: validar server-side a cada server-fn — nunca confiar no client.
-- **Migração da Digi Office**: na mesma migration, inserir tenant + settings apontando para as env vars atuais (`DOCTOROEM_SUPABASE_*`), e fazer um sync inicial para popular as tabelas do Cloud.
-
-## Decisões que preciso confirmar antes de começar
-
-1. **Primeiro usuário super-admin**: posso usar o email que você usar no primeiro signup, ou prefere que eu deixe um seed com email específico (qual)?
-2. **Dados atuais do DoctorOEM (Digi Office)**: posso migrar tudo para tabelas no Lovable Cloud (com `tenant_id`) e passar a ler/gravar lá, **mantendo o DoctorOEM apenas como fonte de sincronização externa**? Ou você quer continuar lendo direto do DoctorOEM em tempo real e o Cloud só guardar metadados (tenants/usuários/configs)?
-3. **Roles dentro do tenant**: mantenho `admin / financeiro / suporte` que já existem no `role-context`?
-
-Posso prosseguir com este plano após essas três respostas.
+1. Migração 1: criar `clientes_oem`, `oem_sync_config`, `oem_sync_logs` no Cloud central + colunas novas em `tenant_oem_settings` + RLS + GRANTs.
+2. Migração 2 (opcional): copiar dados existentes do DoctorOEM externo → Cloud central, atribuindo ao tenant "digi-office".
+3. Refatorar `.server.ts` e `.functions.ts` para usar tenant_id.
+4. Atualizar /configuracoes (credenciais por tenant).
+5. Adicionar botão "Carga inicial" em /empresas.
+6. Testar fluxo: criar empresa nova → preencher credenciais → carga inicial → ver clientes isolados.

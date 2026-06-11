@@ -9,6 +9,7 @@ import {
   getTenantOemSettings,
   upsertTenantOemSettings,
 } from "@/lib/tenant.functions";
+import { testTenantOemConnection, runTenantInitialLoad } from "@/lib/tenant-oem.functions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Settings as SettingsIcon } from "lucide-react";
+import { Plus, Settings as SettingsIcon, Zap, PlugZap } from "lucide-react";
 
 export const Route = createFileRoute("/empresas")({
   head: () => ({
@@ -139,6 +140,7 @@ function EmpresasPage() {
                 />
               </div>
               <OemSettingsDialog tenantId={e.id} tenantNome={e.nome} />
+              <CargaInicialButton tenantId={e.id} tenantNome={e.nome} />
             </CardContent>
           </Card>
         ))}
@@ -160,6 +162,7 @@ function OemSettingsDialog({ tenantId, tenantNome }: { tenantId: string; tenantN
   const [open, setOpen] = useState(false);
   const get = useServerFn(getTenantOemSettings);
   const save = useServerFn(upsertTenantOemSettings);
+  const testConn = useServerFn(testTenantOemConnection);
   const qc = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -169,23 +172,30 @@ function OemSettingsDialog({ tenantId, tenantNome }: { tenantId: string; tenantN
   });
 
   const [form, setForm] = useState({
-    doctoroem_url: "",
-    doctoroem_publishable_secret_name: "",
-    doctoroem_service_secret_name: "",
-    tabletcloud_url: "",
-    tabletcloud_token_secret_name: "",
+    oem_api_base_url: "https://api.pdvlegal.com.br",
+    oem_api_username: "",
+    oem_api_password: "",
+    oem_client_id: "",
+    oem_client_secret: "",
   });
+  const [loaded, setLoaded] = useState(false);
+  const [testing, setTesting] = useState(false);
 
-  // sync once loaded
-  if (data && form.doctoroem_url === "" && (data.doctoroem_url ?? "") !== "") {
-    setForm({
-      doctoroem_url: data.doctoroem_url ?? "",
-      doctoroem_publishable_secret_name: data.doctoroem_publishable_secret_name ?? "",
-      doctoroem_service_secret_name: data.doctoroem_service_secret_name ?? "",
-      tabletcloud_url: data.tabletcloud_url ?? "",
-      tabletcloud_token_secret_name: data.tabletcloud_token_secret_name ?? "",
-    });
-  }
+  useEffect(() => {
+    if (data && !loaded) {
+      setForm({
+        oem_api_base_url: data.oem_api_base_url ?? "https://api.pdvlegal.com.br",
+        oem_api_username: data.oem_api_username ?? "",
+        oem_api_password: data.oem_api_password ?? "",
+        oem_client_id: data.oem_client_id ?? "",
+        oem_client_secret: data.oem_client_secret ?? "",
+      });
+      setLoaded(true);
+    }
+  }, [data, loaded]);
+  useEffect(() => {
+    if (!open) setLoaded(false);
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -197,31 +207,61 @@ function OemSettingsDialog({ tenantId, tenantNome }: { tenantId: string; tenantN
       <DialogContent className="max-w-lg">
         <DialogHeader><DialogTitle>Credenciais OEM — {tenantNome}</DialogTitle></DialogHeader>
         <p className="text-xs text-muted-foreground">
-          As chaves não ficam no banco: armazene-as como secrets no painel Cloud e informe aqui apenas o <strong>nome</strong> do secret (ex.: <code>DOCTOROEM_SUPABASE_SERVICE_ROLE_KEY</code>).
+          Preencha as credenciais OAuth2 da API OEM (TabletCloud / PDV Legal). Elas ficam restritas ao admin desta empresa por RLS.
         </p>
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Carregando…</p>
         ) : (
           <div className="space-y-3">
-            <Field label="DoctorOEM URL" value={form.doctoroem_url} onChange={(v) => setForm({ ...form, doctoroem_url: v })} />
-            <Field label="Nome do secret — publishable key" value={form.doctoroem_publishable_secret_name} onChange={(v) => setForm({ ...form, doctoroem_publishable_secret_name: v })} />
-            <Field label="Nome do secret — service-role key" value={form.doctoroem_service_secret_name} onChange={(v) => setForm({ ...form, doctoroem_service_secret_name: v })} />
-            <Field label="TabletCloud URL" value={form.tabletcloud_url} onChange={(v) => setForm({ ...form, tabletcloud_url: v })} />
-            <Field label="Nome do secret — TabletCloud token" value={form.tabletcloud_token_secret_name} onChange={(v) => setForm({ ...form, tabletcloud_token_secret_name: v })} />
+            <Field label="URL base da API OEM" value={form.oem_api_base_url} onChange={(v) => setForm({ ...form, oem_api_base_url: v })} />
+            <Field label="Usuário (username)" value={form.oem_api_username} onChange={(v) => setForm({ ...form, oem_api_username: v })} />
+            <Field label="Senha (password)" type="password" value={form.oem_api_password} onChange={(v) => setForm({ ...form, oem_api_password: v })} />
+            <Field label="Client ID" value={form.oem_client_id} onChange={(v) => setForm({ ...form, oem_client_id: v })} />
+            <Field label="Client Secret" type="password" value={form.oem_client_secret} onChange={(v) => setForm({ ...form, oem_client_secret: v })} />
           </div>
         )}
-        <DialogFooter>
+        <DialogFooter className="gap-2">
+          <Button
+            variant="outline"
+            disabled={testing}
+            className="gap-2"
+            onClick={async () => {
+              // Salva antes para garantir que o teste use o que está na tela.
+              try {
+                setTesting(true);
+                await save({
+                  data: {
+                    tenant_id: tenantId,
+                    oem_api_base_url: form.oem_api_base_url || null,
+                    oem_api_username: form.oem_api_username || null,
+                    oem_api_password: form.oem_api_password || null,
+                    oem_client_id: form.oem_client_id || null,
+                    oem_client_secret: form.oem_client_secret || null,
+                  },
+                });
+                const r = await testConn({ data: { tenantId } });
+                if (r.ok) toast.success("Conexão OK — token obtido com sucesso.");
+                else toast.error(`Falha: ${r.mensagem}`);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Erro ao testar conexão");
+              } finally {
+                setTesting(false);
+              }
+            }}
+          >
+            <PlugZap className="h-4 w-4" /> {testing ? "Testando…" : "Testar conexão"}
+          </Button>
           <Button
             onClick={async () => {
               try {
                 await save({
                   data: {
                     tenant_id: tenantId,
-                    doctoroem_url: form.doctoroem_url || null,
-                    doctoroem_publishable_secret_name: form.doctoroem_publishable_secret_name || null,
-                    doctoroem_service_secret_name: form.doctoroem_service_secret_name || null,
-                    tabletcloud_url: form.tabletcloud_url || null,
-                    tabletcloud_token_secret_name: form.tabletcloud_token_secret_name || null,
+                    oem_api_base_url: form.oem_api_base_url || null,
+                    oem_api_username: form.oem_api_username || null,
+                    oem_api_password: form.oem_api_password || null,
+                    oem_client_id: form.oem_client_id || null,
+                    oem_client_secret: form.oem_client_secret || null,
                   },
                 });
                 toast.success("Credenciais salvas");
@@ -240,11 +280,48 @@ function OemSettingsDialog({ tenantId, tenantNome }: { tenantId: string; tenantN
   );
 }
 
-function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+}) {
   return (
     <div className="space-y-1.5">
       <Label className="text-xs">{label}</Label>
-      <Input value={value} onChange={(e) => onChange(e.target.value)} />
+      <Input type={type} value={value} onChange={(e) => onChange(e.target.value)} autoComplete="off" />
     </div>
+  );
+}
+
+function CargaInicialButton({ tenantId, tenantNome }: { tenantId: string; tenantNome: string }) {
+  const run = useServerFn(runTenantInitialLoad);
+  const [pending, setPending] = useState(false);
+  return (
+    <Button
+      variant="default"
+      size="sm"
+      className="gap-2"
+      disabled={pending}
+      onClick={async () => {
+        if (!confirm(`Disparar carga inicial para ${tenantNome}? A sincronização roda em segundo plano e pode levar vários minutos.`)) return;
+        try {
+          setPending(true);
+          await run({ data: { tenantId, origem: "carga-inicial" } });
+          toast.success(`Carga inicial iniciada para ${tenantNome}. Acompanhe em Configurações.`);
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Falha ao iniciar carga");
+        } finally {
+          setPending(false);
+        }
+      }}
+    >
+      <Zap className="h-3.5 w-3.5" /> Carga inicial
+    </Button>
   );
 }
