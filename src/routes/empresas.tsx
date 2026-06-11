@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
   listAllTenants,
@@ -246,6 +246,3 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
     </div>
   );
 }
-
-// helper imports kept inline so the file is self-contained
-import { useQuery } from "@tanstack/react-query";
