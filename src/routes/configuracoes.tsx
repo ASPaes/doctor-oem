@@ -93,12 +93,10 @@ function ConfiguracoesPage() {
   const executarFn = useServerFn(scheduledOemSync);
   const executarMutation = useMutation({
     mutationFn: () => executarFn(),
-    onSuccess: (res) => {
-      if (res.status === "sucesso") {
-        toast.success(`Sincronização concluída: ${res.mensagem}`);
-      } else {
-        toast.error(`Sincronização terminou com status "${res.status}": ${res.mensagem}`);
-      }
+    onSuccess: () => {
+      toast.success(
+        "Carga disparada! Rodando em segundo plano — acompanhe o status saindo de 'processando' para 'sucesso' na tabela de logs abaixo.",
+      );
       queryClient.invalidateQueries({ queryKey: ["doctoroem"] });
     },
     onError: (err: Error) => toast.error(`Falha na sincronização: ${err.message}`),
