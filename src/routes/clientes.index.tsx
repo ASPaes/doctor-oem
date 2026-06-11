@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Search, RefreshCw } from "lucide-react";
+import { Search, RefreshCw, Store, Monitor, ClipboardList, Users, DollarSign, Activity } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { listClientes, bulkSyncClientes } from "@/lib/doctoroem.functions";
 import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Card, CardContent } from "@/components/ui/card";
 import { useRole } from "@/lib/role-context";
 import { toast } from "sonner";
 
