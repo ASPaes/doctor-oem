@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Search, Building2, RefreshCw } from "lucide-react";
+import { Search, RefreshCw } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { listClientes, bulkSyncClientes } from "@/lib/doctoroem.functions";
 import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -115,65 +115,82 @@ function ClientesList() {
         </ToggleGroup>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {list.map((c) => (
-          <Link
-            key={c.id}
-            to="/clientes/$id"
-            params={{ id: c.id }}
-            className="glass-panel group relative rounded-2xl p-5 transition hover:glow-border"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="grid h-11 w-11 place-items-center rounded-xl bg-[image:var(--gradient-primary)] text-primary-foreground">
-                  <Building2 className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="font-semibold leading-tight">{c.nomeFantasia}</p>
-                  <p className="text-xs text-muted-foreground">{c.grupoEconomico}</p>
-                </div>
-              </div>
-              <div className="flex flex-col items-end gap-1">
-                <Badge
-                  variant="outline"
-                  className={c.ativo ? "border-success/40 text-success" : "border-muted-foreground/30 text-muted-foreground"}
-                >
-                  {c.ativo ? "Ativo" : "Inativo"}
-                </Badge>
-                {c.bloqueado && (
-                  <Badge variant="outline" className="border-destructive/50 text-destructive">
-                    Bloqueado
-                  </Badge>
+      <div className="rounded-xl border bg-card shadow overflow-x-auto">
+        <table className="w-full caption-bottom text-sm">
+          <thead className="border-b bg-muted/50">
+            <tr>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Cód. Empresa</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Cód. Filial</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Nome Fantasia</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">CNPJ</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Grupo Econômico</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Produto Principal</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Filiais</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">PDVs</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Comandas</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Usuários</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
+              {canSeeFinance && (
+                <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Custo Mensal</th>
+              )}
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Ação</th>
+            </tr>
+          </thead>
+          <tbody className="[&_tr:last-child]:border-0">
+            {list.map((c) => (
+              <tr
+                key={c.id}
+                className="border-b transition-colors hover:bg-muted/50"
+              >
+                <td className="p-2 px-3 align-middle whitespace-nowrap font-medium">{c.codigoEmpresa}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap">{c.codigoFilial}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap">{c.nomeFantasia}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap text-muted-foreground">{c.cnpj}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap text-muted-foreground">{c.grupoEconomico}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap text-muted-foreground">{c.produtoPrincipal}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.filiaisAtivas}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.qtdPdv}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.qtdComandas}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.usuariosAdicionais}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap">
+                  <div className="flex flex-wrap gap-1">
+                    <Badge
+                      variant="outline"
+                      className={c.ativo ? "border-success/40 text-success" : "border-muted-foreground/30 text-muted-foreground"}
+                    >
+                      {c.ativo ? "Ativo" : "Inativo"}
+                    </Badge>
+                    {c.bloqueado && (
+                      <Badge variant="outline" className="border-destructive/50 text-destructive">
+                        Bloqueado
+                      </Badge>
+                    )}
+                  </div>
+                </td>
+                {canSeeFinance && (
+                  <td className="p-2 px-3 align-middle whitespace-nowrap tabular-nums font-medium">
+                    {formatBRL(c.custoMensal)}
+                  </td>
                 )}
-              </div>
-            </div>
-            <dl className="mt-5 grid grid-cols-2 gap-3 text-xs">
-              <Info label="CNPJ" value={c.cnpj} />
-              <Info label="Produto" value={c.produtoPrincipal} />
-              <Info label="Filiais" value={String(c.filiaisAtivas)} />
-              <Info label="PDVs" value={String(c.qtdPdv)} />
-            </dl>
-            {canSeeFinance && (
-              <div className="mt-5 flex items-end justify-between border-t border-border pt-4">
-                <div>
-                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Custo mensal</p>
-                  <p className="text-lg font-semibold tabular-nums">{formatBRL(c.custoMensal)}</p>
-                </div>
-                <span className="text-xs text-primary group-hover:underline">Abrir ficha →</span>
-              </div>
-            )}
-          </Link>
-        ))}
+                <td className="p-2 px-3 align-middle whitespace-nowrap">
+                  <Link
+                    to="/clientes/$id"
+                    params={{ id: c.id }}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Abrir ficha →
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {list.length === 0 && (
+          <div className="p-8 text-center text-muted-foreground text-sm">
+            Nenhum cliente encontrado com os filtros atuais.
+          </div>
+        )}
       </div>
-    </div>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</dt>
-      <dd className="truncate text-foreground">{value}</dd>
     </div>
   );
 }
