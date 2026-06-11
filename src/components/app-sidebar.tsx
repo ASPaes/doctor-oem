@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Users, Building2, Plug, ShieldCheck, Settings } from "lucide-react";
+import { LayoutDashboard, Users, Building2, Plug, ShieldCheck, Settings, Briefcase } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -13,6 +13,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useRole } from "@/lib/role-context";
+import { useTenant } from "@/lib/tenant-context";
 
 const items = [
   { title: "Visão Geral", url: "/", icon: LayoutDashboard, key: "dash" as const },
@@ -27,6 +28,7 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { canManageUsers, canAccessGateway } = useRole();
+  const { isSuper, activeTenant } = useTenant();
 
   const isActive = (url: string) =>
     url === "/" ? pathname === "/" : pathname.startsWith(url);
@@ -70,6 +72,28 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {isSuper && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Administração</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isActive("/empresas")}>
+                    <Link to="/empresas" className="flex items-center gap-2">
+                      <Briefcase className="h-4 w-4" />
+                      {!collapsed && <span>Empresas</span>}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+        {!collapsed && activeTenant && (
+          <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Empresa ativa: <span className="text-foreground font-medium normal-case tracking-normal">{activeTenant.nome}</span>
+          </div>
+        )}
       </SidebarContent>
     </Sidebar>
   );
