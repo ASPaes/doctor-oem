@@ -389,7 +389,7 @@ export async function runTenantOemSync(
         }),
       );
 
-      const validos = detalhados.filter(
+      const validos: Record<string, unknown>[] = detalhados.filter(
         (r): r is Record<string, unknown> => r !== null,
       );
       falhas += lote.length - validos.length;
