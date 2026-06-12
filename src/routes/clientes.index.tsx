@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useMemo, useDeferredValue, useTransition } from "react";
-import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2 } from "lucide-react";
+import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2, Wrench } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
-import { listTenantClientes, runTenantInitialLoad, alterarStatusLicencaOem, alterarStatusAtivacaoOem } from "@/lib/tenant-oem.functions";
+import { listTenantClientes, runTenantInitialLoad, alterarStatusLicencaOem, alterarStatusAtivacaoOem, repararClientesZerados } from "@/lib/tenant-oem.functions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useTenant } from "@/lib/tenant-context";
@@ -54,6 +54,7 @@ function ClientesList() {
   const runLoad = useServerFn(runTenantInitialLoad);
   const alterarLicFn = useServerFn(alterarStatusLicencaOem);
   const alterarAtvFn = useServerFn(alterarStatusAtivacaoOem);
+  const repararFn = useServerFn(repararClientesZerados);
   const { data: clientes = [], isLoading } = useQuery({
     queryKey: ["tenant-clientes", tenantId],
     queryFn: () => listFn({ data: { tenantId: tenantId! } }),
@@ -67,6 +68,59 @@ function ClientesList() {
     },
     onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
   });
+
+  // Reparo incremental: dispara em loop até a fila zerar. Cada chamada
+  // processa um batch pequeno (cabe no tempo do Worker) e devolve o restante.
+  const [reparoState, setReparoState] = useState<{
+    rodando: boolean;
+    feitos: number;
+    restantes: number | null;
+    total: number | null;
+  }>({ rodando: false, feitos: 0, restantes: null, total: null });
+
+  async function repararLoop() {
+    if (!tenantId) return;
+    setReparoState({ rodando: true, feitos: 0, restantes: null, total: null });
+    const toastId = toast.loading("Reparando clientes zerados…");
+    let feitos = 0;
+    let consecutivosVazios = 0;
+    try {
+      for (let i = 0; i < 200; i++) {
+        const res = await repararFn({ data: { tenantId, batchSize: 40 } });
+        feitos += res.atualizados;
+        setReparoState({
+          rodando: true,
+          feitos,
+          restantes: res.restantes,
+          total: res.totalZerados,
+        });
+        toast.loading(
+          `Reparando: ${feitos} corrigidos, ~${res.restantes} restantes…`,
+          { id: toastId },
+        );
+        if (res.processados === 0) break;
+        if (res.atualizados === 0) {
+          consecutivosVazios += 1;
+          if (consecutivosVazios >= 3) break; // mesmos clientes falhando — para
+        } else {
+          consecutivosVazios = 0;
+        }
+      }
+      toast.success(`Reparo concluído: ${feitos} clientes atualizados.`, { id: toastId });
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
+    } catch (err) {
+      toast.error(`Falha no reparo: ${err instanceof Error ? err.message : err}`, { id: toastId });
+    } finally {
+      setReparoState((s) => ({ ...s, rodando: false }));
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
+    }
+  }
+
+  // Conta zerados localmente (rápido) para exibir no botão sem chamar API
+  const zeradosLocais = useMemo(
+    () => clientes.filter((c) => (c.custoMensal ?? 0) <= 0 || c.modulos.length === 0).length,
+    [clientes],
+  );
 
   // Mutations por linha — controlam loading individual via variável `pendingId`
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -187,6 +241,25 @@ function ClientesList() {
           <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? "animate-spin" : ""}`} />
           {syncMutation.isPending ? "Sincronizando…" : "Sincronizar Base de Clientes"}
         </Button>
+        {isAdmin && zeradosLocais > 0 && (
+          <Button
+            variant="outline"
+            onClick={repararLoop}
+            disabled={reparoState.rodando}
+            className="gap-2 border-warning/50 text-warning hover:bg-warning/10"
+          >
+            {reparoState.rodando ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Wrench className="h-4 w-4" />
+            )}
+            {reparoState.rodando
+              ? `Reparando ${reparoState.feitos}${
+                  reparoState.total ? `/${reparoState.total}` : ""
+                }…`
+              : `Reparar Zerados (${zeradosLocais})`}
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
