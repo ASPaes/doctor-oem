@@ -541,6 +541,113 @@ export async function alterarStatusLicencaTenant(
 }
 
 // ============================================================
+// Reparo incremental: re-puxa do OEM só os clientes que estão
+// zerados (sem custo / sem módulos / sem PDV). Processa em batches
+// pequenos e retorna progresso para o cliente chamar em loop até
+// zerar a fila — assim cada chamada cabe no tempo do Worker.
+// ============================================================
+export type RepairBatchResult = {
+  processados: number;
+  atualizados: number;
+  falhas: number;
+  restantes: number;
+  totalZerados: number;
+};
+
+export async function repararZeradosTenant(
+  tenantId: string,
+  batchSize = 40,
+): Promise<RepairBatchResult> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  // Conta total de candidatos zerados (para o cliente saber o restante)
+  const { count: totalZerados } = await supabaseAdmin
+    .from("clientes_oem")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .or("custo_total.is.null,custo_total.eq.0,modulos_ativos.is.null");
+
+  if (!totalZerados || totalZerados === 0) {
+    return { processados: 0, atualizados: 0, falhas: 0, restantes: 0, totalZerados: 0 };
+  }
+
+  // Busca o próximo lote
+  const { data: candidatos, error: selErr } = await supabaseAdmin
+    .from("clientes_oem")
+    .select("id, empresa_codigo, filial_codigo, numero_filiais")
+    .eq("tenant_id", tenantId)
+    .or("custo_total.is.null,custo_total.eq.0,modulos_ativos.is.null")
+    .order("nome_fantasia", { ascending: true })
+    .limit(batchSize);
+
+  if (selErr) throw new Error(`Listagem zerados: ${selErr.message}`);
+  const lote = (candidatos ?? []).filter((c) => c.empresa_codigo && c.filial_codigo);
+  if (lote.length === 0) {
+    return { processados: 0, atualizados: 0, falhas: 0, restantes: 0, totalZerados };
+  }
+
+  const creds = await loadTenantCreds(tenantId);
+  const tokenInicial = await obterTokenTenant(creds);
+  const tokenHolder = criarTokenHolderTenant(creds, tokenInicial);
+
+  // Processa em sub-chunks paralelos de 10 (cuidado com rate limit da OEM)
+  const CHUNK = 10;
+  let atualizados = 0;
+  let falhas = 0;
+
+  for (let i = 0; i < lote.length; i += CHUNK) {
+    const subLote = lote.slice(i, i + CHUNK);
+    const resultados = await Promise.all(
+      subLote.map(async (c) => {
+        const codEmpresa = Number(c.empresa_codigo);
+        const codFilial = Number(c.filial_codigo);
+        if (!Number.isFinite(codEmpresa) || !Number.isFinite(codFilial)) return false;
+        try {
+          const detalhe = await fetchLicenciamentoOem(tokenHolder, codEmpresa, codFilial);
+          if (!detalhe) return false;
+          const row = mapLicenciamentoToRow(detalhe, codEmpresa, codFilial);
+          if (!row) return false;
+          const blindada = blindarRow(row);
+          if ((c.numero_filiais ?? 0) > 0) blindada.numero_filiais = c.numero_filiais;
+          const payload = { ...blindada, tenant_id: tenantId } as Record<string, unknown>;
+          const { error: upErr } = await supabaseAdmin
+            .from("clientes_oem")
+            // @ts-expect-error — payload dinâmico
+            .update(payload)
+            .eq("id", c.id);
+          if (upErr) {
+            console.error(`[repararZerados] update ${c.id}:`, upErr.message);
+            return false;
+          }
+          return true;
+        } catch (err) {
+          console.error(
+            `[repararZerados] falha ${codEmpresa}/${codFilial}:`,
+            err instanceof Error ? err.message : err,
+          );
+          return false;
+        }
+      }),
+    );
+    for (const ok of resultados) {
+      if (ok) atualizados += 1;
+      else falhas += 1;
+    }
+    // Pausa curta entre sub-chunks para não estourar rate limit
+    if (i + CHUNK < lote.length) await new Promise((r) => setTimeout(r, 250));
+  }
+
+  const restantes = Math.max(0, totalZerados - atualizados);
+  return {
+    processados: lote.length,
+    atualizados,
+    falhas,
+    restantes,
+    totalZerados,
+  };
+}
+
+// ============================================================
 // Ativar / Desativar cliente diretamente no OEM
 // Mesmo padrão de bloquear/desbloquear, mas alterando o status
 // operacional da filial (filial.status: "AT" | "IN" e filial.ativo).
