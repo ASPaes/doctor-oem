@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Plus, Settings as SettingsIcon, Zap, PlugZap } from "lucide-react";
+import { Pencil } from "lucide-react";
 
 export const Route = createFileRoute("/empresas")({
   head: () => ({
@@ -141,6 +142,7 @@ function EmpresasPage() {
               </div>
               <OemSettingsDialog tenantId={e.id} tenantNome={e.nome} />
               <CargaInicialButton tenantId={e.id} tenantNome={e.nome} />
+              <EditTenantDialog tenant={e} />
             </CardContent>
           </Card>
         ))}
