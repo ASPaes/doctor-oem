@@ -539,3 +539,80 @@ export async function alterarStatusLicencaTenant(
     return { ok: false, mensagem: e instanceof Error ? e.message : String(e) };
   }
 }
+
+// ============================================================
+// Ativar / Desativar cliente diretamente no OEM
+// Mesmo padrão de bloquear/desbloquear, mas alterando o status
+// operacional da filial (filial.status: "AT" | "IN" e filial.ativo).
+// ============================================================
+export async function alterarStatusAtivacaoTenant(
+  tenantId: string,
+  codEmpresa: number,
+  codFilial: number,
+  ativar: boolean,
+): Promise<{ ok: true } | { ok: false; mensagem: string }> {
+  try {
+    const creds = await loadTenantCreds(tenantId);
+    const token = await obterTokenTenant(creds);
+    const url = `${creds.baseUrl}/v1/licenciamento/${codEmpresa}/${codFilial}`;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    } as const;
+
+    const getResp = await fetch(url, { method: "GET", headers });
+    if (!getResp.ok) {
+      const preview = await getResp.text().catch(() => "");
+      throw new Error(`GET licença OEM HTTP ${getResp.status}: ${preview.slice(0, 180)}`);
+    }
+    const raw = (await getResp.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!raw || typeof raw !== "object") {
+      throw new Error("GET licença OEM retornou payload inválido.");
+    }
+
+    // Aplica em todos os "envelopes" possíveis + filial aninhada.
+    const applyAtivar = (obj: Record<string, unknown>) => {
+      obj.ativo = ativar;
+      if (obj.filial && typeof obj.filial === "object" && !Array.isArray(obj.filial)) {
+        const filial = obj.filial as Record<string, unknown>;
+        filial.ativo = ativar;
+        filial.status = ativar ? "AT" : "IN";
+      }
+    };
+    applyAtivar(raw);
+    const response = (raw.response as Record<string, unknown> | undefined) ?? undefined;
+    if (response && typeof response === "object") {
+      applyAtivar(response);
+      const respData = (response.data as Record<string, unknown> | undefined) ?? undefined;
+      if (respData && typeof respData === "object") applyAtivar(respData);
+    }
+    const data = (raw.data as Record<string, unknown> | undefined) ?? undefined;
+    if (data && typeof data === "object") applyAtivar(data);
+
+    const putResp = await fetch(url, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(raw),
+    });
+    if (!putResp.ok) {
+      const preview = await putResp.text().catch(() => "");
+      throw new Error(`PUT licença OEM HTTP ${putResp.status}: ${preview.slice(0, 180)}`);
+    }
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin
+      .from("clientes_oem")
+      .update({ status: ativar ? "Ativo" : "Desativado" })
+      .eq("tenant_id", tenantId)
+      .eq("empresa_codigo", String(codEmpresa))
+      .eq("filial_codigo", String(codFilial));
+    if (error) {
+      console.error("[tenant-oem] OEM atualizado, mas falha ao refletir local:", error.message);
+    }
+
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, mensagem: e instanceof Error ? e.message : String(e) };
+  }
+}
