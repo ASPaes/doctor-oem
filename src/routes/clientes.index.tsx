@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Card, CardContent } from "@/components/ui/card";
 import { useRole } from "@/lib/role-context";
+import { useHorizontalDragScroll } from "@/hooks/use-horizontal-drag-scroll";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/clientes/")({
@@ -33,6 +34,7 @@ export const Route = createFileRoute("/clientes/")({
 function ClientesList() {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState<string[]>(["ativo"]);
+  const scrollRef = useHorizontalDragScroll<HTMLDivElement>();
   const { canSeeFinance } = useRole();
   const { activeTenant, loading: tenantLoading } = useTenant();
   const tenantId = activeTenant?.id ?? null;
@@ -198,8 +200,8 @@ function ClientesList() {
         </Card>
       </div>
 
-      <div className="rounded-xl border bg-card shadow overflow-x-auto">
-        <table className="w-full caption-bottom text-sm">
+      <div ref={scrollRef} className="rounded-xl border bg-card shadow overflow-x-auto select-none cursor-grab">
+        <table className="min-w-max caption-bottom text-sm">
           <thead className="border-b bg-muted/50">
             <tr>
               <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Cód. Empresa</th>
