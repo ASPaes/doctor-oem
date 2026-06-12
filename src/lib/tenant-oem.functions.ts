@@ -355,3 +355,25 @@ export const updateTenantSyncSettings = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return { ok: true };
   });
+
+// ----- Reparo incremental: re-puxa OEM apenas para clientes zerados -----
+export const repararClientesZerados = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        tenantId: z.string().uuid(),
+        batchSize: z.number().int().min(1).max(100).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: isAdmin } = await supabase.rpc("is_tenant_admin", {
+      _user_id: userId,
+      _tenant_id: data.tenantId,
+    });
+    if (!isAdmin) throw new Error("Apenas administradores podem reparar clientes.");
+    const { repararZeradosTenant } = await import("@/lib/tenant-oem.server");
+    return repararZeradosTenant(data.tenantId, data.batchSize ?? 40);
+  });
