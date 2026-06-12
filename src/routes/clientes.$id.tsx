@@ -1,12 +1,14 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import {
   ArrowLeft, Eye, RefreshCw, ShieldAlert, ShieldCheck,
   Calendar, Hash, Building2, Users, Monitor, Boxes,
 } from "lucide-react";
 import { formatBRL, type Cliente } from "@/lib/mock-data";
-import { getCliente, forceSyncCliente } from "@/lib/doctoroem.functions";
-import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getTenantCliente, runTenantInitialLoad } from "@/lib/tenant-oem.functions";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { useTenant } from "@/lib/tenant-context";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,12 +18,6 @@ import {
 import { useRole } from "@/lib/role-context";
 import { toast } from "sonner";
 
-const clienteQueryOptions = (id: string) =>
-  queryOptions({
-    queryKey: ["doctoroem", "cliente", id],
-    queryFn: () => getCliente({ data: { id } }),
-  });
-
 export const Route = createFileRoute("/clientes/$id")({
   head: () => ({
     meta: [
@@ -29,10 +25,6 @@ export const Route = createFileRoute("/clientes/$id")({
       { name: "description", content: "Ficha completa do cliente com licenças OEM, módulos contratados e custos." },
     ],
   }),
-  loader: async ({ params, context }) => {
-    const cliente = await context.queryClient.ensureQueryData(clienteQueryOptions(params.id));
-    if (!cliente) throw notFound();
-  },
   component: ClienteDetalhe,
   notFoundComponent: () => (
     <div className="p-10 text-center text-muted-foreground">Cliente não encontrado.</div>
@@ -44,28 +36,44 @@ export const Route = createFileRoute("/clientes/$id")({
 
 function ClienteDetalhe() {
   const { id } = Route.useParams();
-  const { data: clienteOrNull } = useSuspenseQuery(clienteQueryOptions(id));
-  const cliente = clienteOrNull as Cliente; // loader já garantiu não-nulo
+  const { activeTenant, loading: tenantLoading } = useTenant();
+  const tenantId = activeTenant?.id ?? null;
+  const getFn = useServerFn(getTenantCliente);
+  const runLoad = useServerFn(runTenantInitialLoad);
+  const { data: clienteOrNull, isLoading } = useQuery({
+    queryKey: ["tenant-cliente", tenantId, id],
+    queryFn: () => getFn({ data: { tenantId: tenantId!, id } }),
+    enabled: !!tenantId,
+  });
   const { canSeeFinance } = useRole();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const queryClient = useQueryClient();
   const syncMutation = useMutation({
-    mutationFn: () => forceSyncCliente({ data: { id } }),
-    onMutate: () => {
-      toast.message("Sincronizando com OEM...", {
-        description: `Empresa ${cliente.codigoEmpresa}/${cliente.codigoFilial}`,
-      });
-    },
-    onSuccess: (fresh) => {
-      if (fresh) {
-        queryClient.setQueryData(["doctoroem", "cliente", id], fresh);
-        queryClient.invalidateQueries({ queryKey: ["doctoroem", "clientes"] });
-        toast.success("Dados atualizados pelo OEM");
-      }
+    mutationFn: () => runLoad({ data: { tenantId: tenantId!, origem: "manual" } }),
+    onSuccess: () => {
+      toast.success("Sincronização disparada — atualizando em segundo plano.");
+      queryClient.invalidateQueries({ queryKey: ["tenant-cliente", tenantId, id] });
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
     },
     onError: (err: Error) => toast.error(err.message),
   });
   const syncing = syncMutation.isPending;
+
+  if (tenantLoading || !tenantId) {
+    return <div className="p-10 text-center text-muted-foreground">Selecione uma empresa no topo…</div>;
+  }
+  if (isLoading) {
+    return <div className="p-10 text-center text-muted-foreground">Carregando cliente…</div>;
+  }
+  if (!clienteOrNull) {
+    return (
+      <div className="p-10 text-center text-muted-foreground">
+        Cliente não encontrado nesta empresa.{" "}
+        <Link to="/clientes" className="text-primary hover:underline">Voltar</Link>
+      </div>
+    );
+  }
+  const cliente = clienteOrNull as Cliente;
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
