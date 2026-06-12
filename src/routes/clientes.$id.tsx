@@ -2,13 +2,14 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import {
   ArrowLeft, Eye, RefreshCw, ShieldAlert, ShieldCheck,
-  Calendar, Hash, Building2, Users, Monitor, Boxes,
+  Calendar, Hash, Building2, Users, Monitor, Boxes, Power, PowerOff,
 } from "lucide-react";
 import { formatBRL, type Cliente } from "@/lib/mock-data";
 import {
   getTenantCliente,
   runTenantInitialLoad,
   alterarStatusLicencaOem,
+  alterarStatusAtivacaoOem,
 } from "@/lib/tenant-oem.functions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -45,6 +46,7 @@ function ClienteDetalhe() {
   const getFn = useServerFn(getTenantCliente);
   const runLoad = useServerFn(runTenantInitialLoad);
   const alterarStatusFn = useServerFn(alterarStatusLicencaOem);
+  const alterarAtivacaoFn = useServerFn(alterarStatusAtivacaoOem);
   const { data: clienteOrNull, isLoading } = useQuery({
     queryKey: ["tenant-cliente", tenantId, id],
     queryFn: () => getFn({ data: { tenantId: tenantId!, id } }),
@@ -80,6 +82,19 @@ function ClienteDetalhe() {
   });
   const statusLoading = statusMutation.isPending;
 
+  const ativacaoMutation = useMutation({
+    mutationFn: (ativar: boolean) =>
+      alterarAtivacaoFn({ data: { tenantId: tenantId!, clienteId: id, ativar } }),
+    onSuccess: (res) => {
+      toast.success(res.ativo ? "Cliente reativado no OEM." : "Cliente desativado no OEM.");
+      queryClient.invalidateQueries({ queryKey: ["tenant-cliente", tenantId, id] });
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+  const ativacaoLoading = ativacaoMutation.isPending;
+  const anyBusy = statusLoading || ativacaoLoading || syncing;
+
   if (tenantLoading || !tenantId) {
     return <div className="p-10 text-center text-muted-foreground">Selecione uma empresa no topo…</div>;
   }
@@ -104,10 +119,11 @@ function ClienteDetalhe() {
         </Link>
         <div className="flex items-center gap-2 flex-wrap">
           {isAdminOfActiveTenant && (
-            cliente.bloqueado ? (
+            <>
+            {cliente.bloqueado ? (
               <Button
                 onClick={() => statusMutation.mutate(false)}
-                disabled={statusLoading || syncing}
+                disabled={anyBusy}
                 className="bg-success text-success-foreground hover:bg-success/90"
               >
                 {statusLoading ? (
@@ -128,7 +144,7 @@ function ClienteDetalhe() {
                     statusMutation.mutate(true);
                   }
                 }}
-                disabled={statusLoading || syncing}
+                disabled={anyBusy}
                 variant="destructive"
               >
                 {statusLoading ? (
@@ -138,7 +154,40 @@ function ClienteDetalhe() {
                 )}
                 {statusLoading ? "Bloqueando..." : "Bloquear Licença"}
               </Button>
-            )
+            )}
+            {cliente.ativo ? (
+              <Button
+                onClick={() => {
+                  if (window.confirm(`Desativar o cliente "${cliente.nomeFantasia}" no OEM?`)) {
+                    ativacaoMutation.mutate(false);
+                  }
+                }}
+                disabled={anyBusy}
+                variant="outline"
+                className="border-destructive/50 text-destructive hover:bg-destructive/10"
+              >
+                {ativacaoLoading ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <PowerOff className="mr-2 h-4 w-4" />
+                )}
+                {ativacaoLoading ? "Desativando..." : "Desativar Cliente"}
+              </Button>
+            ) : (
+              <Button
+                onClick={() => ativacaoMutation.mutate(true)}
+                disabled={anyBusy}
+                className="bg-success text-success-foreground hover:bg-success/90"
+              >
+                {ativacaoLoading ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Power className="mr-2 h-4 w-4" />
+                )}
+                {ativacaoLoading ? "Ativando..." : "Ativar Cliente"}
+              </Button>
+            )}
+            </>
           )}
           <Button onClick={() => syncMutation.mutate()} disabled={syncing || statusLoading} variant="outline" className="glass-panel">
             <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />

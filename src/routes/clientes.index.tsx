@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useMemo, useDeferredValue } from "react";
-import { Search, RefreshCw, Store, Monitor, ClipboardList, Users, DollarSign, Activity, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2 } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
-import { listTenantClientes, runTenantInitialLoad } from "@/lib/tenant-oem.functions";
+import { listTenantClientes, runTenantInitialLoad, alterarStatusLicencaOem, alterarStatusAtivacaoOem } from "@/lib/tenant-oem.functions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useTenant } from "@/lib/tenant-context";
@@ -33,19 +33,26 @@ export const Route = createFileRoute("/clientes/")({
 
 function ClientesList() {
   const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string[]>(["ativo"]);
+  // Dimensão 1: status do CLIENTE (operacional)
+  const [clienteFilter, setClienteFilter] = useState<string[]>(["ativo", "desativado"]);
+  // Dimensão 2: status da LICENÇA
+  const [licencaFilter, setLicencaFilter] = useState<string[]>(["ativa", "bloqueada"]);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 100;
   // Valores adiados: o clique no filtro responde na hora e a tabela pesada re-renderiza depois
   const deferredQ = useDeferredValue(q);
-  const deferredStatus = useDeferredValue(statusFilter);
+  const deferredCliente = useDeferredValue(clienteFilter);
+  const deferredLicenca = useDeferredValue(licencaFilter);
   const scrollRef = useHorizontalDragScroll<HTMLDivElement>();
-  const { canSeeFinance } = useRole();
+  const { canSeeFinance, role } = useRole();
+  const isAdmin = role === "admin";
   const { activeTenant, loading: tenantLoading } = useTenant();
   const tenantId = activeTenant?.id ?? null;
   const queryClient = useQueryClient();
   const listFn = useServerFn(listTenantClientes);
   const runLoad = useServerFn(runTenantInitialLoad);
+  const alterarLicFn = useServerFn(alterarStatusLicencaOem);
+  const alterarAtvFn = useServerFn(alterarStatusAtivacaoOem);
   const { data: clientes = [], isLoading } = useQuery({
     queryKey: ["tenant-clientes", tenantId],
     queryFn: () => listFn({ data: { tenantId: tenantId! } }),
@@ -60,11 +67,38 @@ function ClientesList() {
     onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
   });
 
+  // Mutations por linha — controlam loading individual via variável `pendingId`
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const licencaMutation = useMutation({
+    mutationFn: ({ clienteId, bloquear }: { clienteId: string; bloquear: boolean }) =>
+      alterarLicFn({ data: { tenantId: tenantId!, clienteId, bloquear } }),
+    onMutate: ({ clienteId }) => setPendingId(clienteId),
+    onSuccess: (res) => {
+      toast.success(res.bloqueado ? "Licença bloqueada no OEM." : "Licença desbloqueada no OEM.");
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+    onSettled: () => setPendingId(null),
+  });
+  const ativacaoMutation = useMutation({
+    mutationFn: ({ clienteId, ativar }: { clienteId: string; ativar: boolean }) =>
+      alterarAtvFn({ data: { tenantId: tenantId!, clienteId, ativar } }),
+    onMutate: ({ clienteId }) => setPendingId(clienteId),
+    onSuccess: (res) => {
+      toast.success(res.ativo ? "Cliente reativado no OEM." : "Cliente desativado no OEM.");
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+    onSettled: () => setPendingId(null),
+  });
+
   const list = useMemo(() => {
     const term = deferredQ.trim().toLowerCase();
     return clientes.filter((c) => {
-      const status = c.bloqueado ? "bloqueado" : c.ativo ? "ativo" : "inativo";
-      if (deferredStatus.length > 0 && !deferredStatus.includes(status)) return false;
+      const cliKey = c.ativo ? "ativo" : "desativado";
+      const licKey = c.bloqueado ? "bloqueada" : "ativa";
+      if (deferredCliente.length > 0 && !deferredCliente.includes(cliKey)) return false;
+      if (deferredLicenca.length > 0 && !deferredLicenca.includes(licKey)) return false;
       if (!term) return true;
       return (
         c.nomeFantasia.toLowerCase().includes(term) ||
@@ -74,9 +108,24 @@ function ClientesList() {
         (c.codigoFilial ?? "").toLowerCase().includes(term)
       );
     });
-  }, [clientes, deferredQ, deferredStatus]);
+  }, [clientes, deferredQ, deferredCliente, deferredLicenca]);
 
   const totals = useMemo(
+    () =>
+      clientes.reduce(
+        (acc, c) => {
+          if (c.ativo && !c.bloqueado) acc.ativoLicAtiva++;
+          else if (c.ativo && c.bloqueado) acc.ativoLicBloqueada++;
+          else if (!c.ativo && !c.bloqueado) acc.desativadoLicAtiva++;
+          else acc.desativadoLicBloqueada++;
+          return acc;
+        },
+        { ativoLicAtiva: 0, ativoLicBloqueada: 0, desativadoLicAtiva: 0, desativadoLicBloqueada: 0 },
+      ),
+    [clientes],
+  );
+
+  const pageTotals = useMemo(
     () =>
       list.reduce(
         (acc, c) => {
@@ -85,12 +134,9 @@ function ClientesList() {
           acc.comandas += c.qtdComandas;
           acc.usuarios += c.usuariosAdicionais;
           acc.custo += c.custoMensal;
-          if (c.bloqueado) acc.bloqueados++;
-          else if (c.ativo) acc.ativos++;
-          else acc.inativos++;
           return acc;
         },
-        { filiais: 0, pdvs: 0, comandas: 0, usuarios: 0, custo: 0, ativos: 0, inativos: 0, bloqueados: 0 },
+        { filiais: 0, pdvs: 0, comandas: 0, usuarios: 0, custo: 0 },
       ),
     [list],
   );
@@ -141,88 +187,94 @@ function ClientesList() {
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Status</span>
-        <ToggleGroup
-          type="multiple"
-          value={statusFilter}
-          onValueChange={(v) => {
-            setStatusFilter(v);
-            setPage(1);
-          }}
-          variant="outline"
-          size="sm"
-        >
-          <ToggleGroupItem value="ativo" aria-label="Mostrar ativos">
-            Ativo
-          </ToggleGroupItem>
-          <ToggleGroupItem value="inativo" aria-label="Mostrar inativos">
-            Inativo
-          </ToggleGroupItem>
-          <ToggleGroupItem value="bloqueado" aria-label="Mostrar bloqueados">
-            Bloqueado
-          </ToggleGroupItem>
-        </ToggleGroup>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Cliente</span>
+          <ToggleGroup
+            type="multiple"
+            value={clienteFilter}
+            onValueChange={(v) => { setClienteFilter(v); setPage(1); }}
+            variant="outline"
+            size="sm"
+          >
+            <ToggleGroupItem value="ativo">Ativo</ToggleGroupItem>
+            <ToggleGroupItem value="desativado">Desativado</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Licença</span>
+          <ToggleGroup
+            type="multiple"
+            value={licencaFilter}
+            onValueChange={(v) => { setLicencaFilter(v); setPage(1); }}
+            variant="outline"
+            size="sm"
+          >
+            <ToggleGroupItem value="ativa">Ativa</ToggleGroupItem>
+            <ToggleGroupItem value="bloqueada">Bloqueada</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <ShieldCheck className="h-5 w-5 text-success mb-1" />
+            <span className="text-2xl font-bold text-success">{totals.ativoLicAtiva}</span>
+            <span className="text-[11px] text-muted-foreground leading-tight">Ativo<br/>Lic. Ativa</span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <ShieldAlert className="h-5 w-5 text-destructive mb-1" />
+            <span className="text-2xl font-bold text-destructive">{totals.ativoLicBloqueada}</span>
+            <span className="text-[11px] text-muted-foreground leading-tight">Ativo<br/>Lic. Bloqueada</span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <PowerOff className="h-5 w-5 text-muted-foreground mb-1" />
+            <span className="text-2xl font-bold">{totals.desativadoLicAtiva}</span>
+            <span className="text-[11px] text-muted-foreground leading-tight">Desativado<br/>Lic. Ativa</span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+            <PowerOff className="h-5 w-5 text-destructive mb-1" />
+            <span className="text-2xl font-bold">{totals.desativadoLicBloqueada}</span>
+            <span className="text-[11px] text-muted-foreground leading-tight">Desativado<br/>Lic. Bloqueada</span>
+          </CardContent>
+        </Card>
         <Card>
           <CardContent className="p-4 flex flex-col items-center justify-center text-center">
             <Activity className="h-5 w-5 text-muted-foreground mb-1" />
             <span className="text-2xl font-bold">{list.length}</span>
-            <span className="text-xs text-muted-foreground">Clientes</span>
+            <span className="text-xs text-muted-foreground">Filtrados</span>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 flex flex-col items-center justify-center text-center">
             <Store className="h-5 w-5 text-muted-foreground mb-1" />
-            <span className="text-2xl font-bold">{totals.filiais}</span>
+            <span className="text-2xl font-bold">{pageTotals.filiais}</span>
             <span className="text-xs text-muted-foreground">Filiais</span>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 flex flex-col items-center justify-center text-center">
             <Monitor className="h-5 w-5 text-muted-foreground mb-1" />
-            <span className="text-2xl font-bold">{totals.pdvs}</span>
+            <span className="text-2xl font-bold">{pageTotals.pdvs}</span>
             <span className="text-xs text-muted-foreground">PDVs</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-            <ClipboardList className="h-5 w-5 text-muted-foreground mb-1" />
-            <span className="text-2xl font-bold">{totals.comandas}</span>
-            <span className="text-xs text-muted-foreground">Comandas</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-            <Users className="h-5 w-5 text-muted-foreground mb-1" />
-            <span className="text-2xl font-bold">{totals.usuarios}</span>
-            <span className="text-xs text-muted-foreground">Usuários</span>
           </CardContent>
         </Card>
         {canSeeFinance && (
           <Card>
             <CardContent className="p-4 flex flex-col items-center justify-center text-center">
               <DollarSign className="h-5 w-5 text-muted-foreground mb-1" />
-              <span className="text-2xl font-bold">{formatBRL(totals.custo)}</span>
+              <span className="text-2xl font-bold">{formatBRL(pageTotals.custo)}</span>
               <span className="text-xs text-muted-foreground">Custo Mensal</span>
             </CardContent>
           </Card>
         )}
-        <Card>
-          <CardContent className="p-4 flex flex-col items-center justify-center text-center gap-1">
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="border-success/40 text-success text-xs">{totals.ativos} Ativo</Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="border-muted-foreground/30 text-muted-foreground text-xs">{totals.inativos} Inativo</Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="border-destructive/50 text-destructive text-xs">{totals.bloqueados} Bloqueado</Badge>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       <div ref={scrollRef} className="rounded-xl border bg-card shadow overflow-x-auto select-none cursor-grab">
@@ -237,45 +289,49 @@ function ClientesList() {
               <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Produto Principal</th>
               <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Filiais</th>
               <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">PDVs</th>
-              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Comandas</th>
-              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Usuários</th>
-              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Status Cliente</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Status Licença</th>
               {canSeeFinance && (
                 <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Custo Mensal</th>
               )}
-              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Ação</th>
+              <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Ações</th>
             </tr>
           </thead>
           <tbody className="[&_tr:last-child]:border-0">
-            {pageList.map((c) => (
+            {pageList.map((c) => {
+              const isBusy = pendingId === c.id;
+              return (
               <tr
                 key={c.id}
                 className="border-b transition-colors hover:bg-muted/50"
               >
                 <td className="p-2 px-3 align-middle whitespace-nowrap font-medium">{c.codigoEmpresa}</td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap">{c.codigoFilial}</td>
-                <td className="p-2 px-3 align-middle whitespace-nowrap">{c.nomeFantasia}</td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap">
+                  <Link to="/clientes/$id" params={{ id: c.id }} className="hover:text-primary hover:underline">
+                    {c.nomeFantasia}
+                  </Link>
+                </td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap text-muted-foreground">{c.cnpj}</td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap text-muted-foreground">{c.grupoEconomico}</td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap text-muted-foreground">{c.produtoPrincipal}</td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.filiaisAtivas}</td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.qtdPdv}</td>
-                <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.qtdComandas}</td>
-                <td className="p-2 px-3 align-middle whitespace-nowrap text-center">{c.usuariosAdicionais}</td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap">
-                  <div className="flex flex-wrap gap-1">
-                    <Badge
-                      variant="outline"
-                      className={c.ativo ? "border-success/40 text-success" : "border-muted-foreground/30 text-muted-foreground"}
-                    >
-                      {c.ativo ? "Ativo" : "Inativo"}
-                    </Badge>
-                    {c.bloqueado && (
-                      <Badge variant="outline" className="border-destructive/50 text-destructive">
-                        Bloqueado
-                      </Badge>
-                    )}
-                  </div>
+                  <Badge
+                    variant="outline"
+                    className={c.ativo ? "border-success/40 text-success" : "border-muted-foreground/40 text-muted-foreground"}
+                  >
+                    {c.ativo ? "Ativo" : "Desativado"}
+                  </Badge>
+                </td>
+                <td className="p-2 px-3 align-middle whitespace-nowrap">
+                  <Badge
+                    variant="outline"
+                    className={c.bloqueado ? "border-destructive/50 text-destructive" : "border-success/40 text-success"}
+                  >
+                    {c.bloqueado ? "Bloqueada" : "Ativa"}
+                  </Badge>
                 </td>
                 {canSeeFinance && (
                   <td className="p-2 px-3 align-middle whitespace-nowrap tabular-nums font-medium">
@@ -283,16 +339,70 @@ function ClientesList() {
                   </td>
                 )}
                 <td className="p-2 px-3 align-middle whitespace-nowrap">
-                  <Link
-                    to="/clientes/$id"
-                    params={{ id: c.id }}
-                    className="text-xs text-primary hover:underline"
-                  >
-                    Abrir ficha →
-                  </Link>
+                  <div className="flex items-center gap-1.5">
+                    {isAdmin && (
+                      <>
+                        {c.bloqueado ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 border-success/50 text-success hover:bg-success/10"
+                            disabled={isBusy}
+                            onClick={() => licencaMutation.mutate({ clienteId: c.id, bloquear: false })}
+                          >
+                            {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+                            Desbloquear
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="h-7 gap-1"
+                            disabled={isBusy}
+                            onClick={() => {
+                              if (window.confirm(`Bloquear a licença de "${c.nomeFantasia}"? O sistema do cliente fica indisponível.`)) {
+                                licencaMutation.mutate({ clienteId: c.id, bloquear: true });
+                              }
+                            }}
+                          >
+                            {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldAlert className="h-3 w-3" />}
+                            Bloquear
+                          </Button>
+                        )}
+                        {c.ativo ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 border-destructive/40 text-destructive hover:bg-destructive/10"
+                            disabled={isBusy}
+                            onClick={() => {
+                              if (window.confirm(`Desativar o cliente "${c.nomeFantasia}" no OEM?`)) {
+                                ativacaoMutation.mutate({ clienteId: c.id, ativar: false });
+                              }
+                            }}
+                          >
+                            {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <PowerOff className="h-3 w-3" />}
+                            Desativar
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 border-success/50 text-success hover:bg-success/10"
+                            disabled={isBusy}
+                            onClick={() => ativacaoMutation.mutate({ clienteId: c.id, ativar: true })}
+                          >
+                            {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Power className="h-3 w-3" />}
+                            Ativar
+                          </Button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
         {list.length === 0 && (
