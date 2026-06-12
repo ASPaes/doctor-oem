@@ -111,7 +111,14 @@ async function loadTenantCreds(tenantId: string): Promise<TenantCreds> {
   };
 }
 
-export async function obterTokenTenant(creds: TenantCreds): Promise<string> {
+// Margem de segurança antes do vencimento do token (renova 2 min antes).
+const TOKEN_MARGEM_MS = 120_000;
+
+// Solicita um token NOVO à API OEM, com retry/backoff em caso de 429
+// (a OEM limita requisições ao endpoint /token).
+async function solicitarTokenOem(
+  creds: TenantCreds,
+): Promise<{ token: string; expiraEm: string }> {
   const body = new URLSearchParams({
     username: creds.username,
     password: creds.password,
@@ -119,29 +126,76 @@ export async function obterTokenTenant(creds: TenantCreds): Promise<string> {
     client_id: creds.clientId,
     client_secret: creds.clientSecret,
   });
-  const resp = await fetch(`${creds.baseUrl}/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body: body.toString(),
-  });
-  if (!resp.ok) {
+  const MAX_TENTATIVAS = 3;
+  let ultimaMensagem = "Falha na autenticação OEM.";
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    const resp = await fetch(`${creds.baseUrl}/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: body.toString(),
+    });
+    if (resp.ok) {
+      const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+      const token = typeof json.access_token === "string" ? json.access_token : null;
+      if (!token) throw new Error("Resposta de token sem access_token.");
+      const expiresIn = Number(json.expires_in);
+      const vidaMs = (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600) * 1000;
+      return { token, expiraEm: new Date(Date.now() + vidaMs).toISOString() };
+    }
     const preview = await resp.text().catch(() => "");
-    throw new Error(
-      `Falha na autenticação OEM (HTTP ${resp.status}): ${preview.slice(0, 180)}`,
-    );
+    ultimaMensagem = `Falha na autenticação OEM (HTTP ${resp.status}): ${preview.slice(0, 180)}`;
+    // 429 = rate limit no /token → aguarda e tenta de novo (backoff progressivo).
+    if (resp.status === 429 && tentativa < MAX_TENTATIVAS) {
+      await new Promise((r) => setTimeout(r, 5000 * tentativa));
+      continue;
+    }
+    throw new Error(ultimaMensagem);
   }
-  const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-  const token = typeof json.access_token === "string" ? json.access_token : null;
-  if (!token) throw new Error("Resposta de token sem access_token.");
+  throw new Error(ultimaMensagem);
+}
+
+// Token com CACHE compartilhado (tabela oem_token_cache, acesso só do servidor).
+// Evita pedir token novo a cada ação — principal causa do erro HTTP 429.
+export async function obterTokenTenant(
+  tenantId: string,
+  creds: TenantCreds,
+  forcarNovo = false,
+): Promise<string> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  if (!forcarNovo) {
+    const { data } = await supabaseAdmin
+      .from("oem_token_cache")
+      .select("token, expira_em")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (data?.token) {
+      const expira = new Date(data.expira_em).getTime();
+      if (Number.isFinite(expira) && expira - TOKEN_MARGEM_MS > Date.now()) {
+        return data.token;
+      }
+    }
+  }
+  const { token, expiraEm } = await solicitarTokenOem(creds);
+  const { error } = await supabaseAdmin
+    .from("oem_token_cache")
+    .upsert(
+      { tenant_id: tenantId, token, expira_em: expiraEm, atualizado_em: new Date().toISOString() },
+      { onConflict: "tenant_id" },
+    );
+  if (error) console.error("[tenant-oem] falha ao salvar cache de token:", error.message);
   return token;
 }
 
 // Holder mutável: permite que fetchLicenciamentoOem renove o token quando a
 // API responder 401 no meio do loop longo (carga inicial pode levar minutos).
-function criarTokenHolderTenant(creds: TenantCreds, initial: string): TokenHolder {
+function criarTokenHolderTenant(
+  tenantId: string,
+  creds: TenantCreds,
+  initial: string,
+): TokenHolder {
   const holder: TokenHolder = {
     value: initial,
     clear: () => {
@@ -155,7 +209,7 @@ function criarTokenHolderTenant(creds: TenantCreds, initial: string): TokenHolde
       try {
         if (reason === "401") await new Promise((r) => setTimeout(r, 2000));
         holder.value = "";
-        holder.value = await obterTokenTenant(creds);
+        holder.value = await obterTokenTenant(tenantId, creds, true);
       } finally {
         pending = null;
       }
@@ -214,11 +268,36 @@ export async function testTenantConnection(
 ): Promise<{ ok: true; baseUrl: string } | { ok: false; mensagem: string }> {
   try {
     const creds = await loadTenantCreds(tenantId);
-    await obterTokenTenant(creds);
+    await obterTokenTenant(tenantId, creds, true);
     return { ok: true, baseUrl: creds.baseUrl };
   } catch (e) {
     return { ok: false, mensagem: e instanceof Error ? e.message : String(e) };
   }
+}
+
+// Faz uma chamada autenticada à API OEM usando o token em cache;
+// se o OEM responder 401 (token vencido/invalidado), renova UMA vez e repete.
+async function fetchOemAutenticado(
+  tenantId: string,
+  creds: TenantCreds,
+  url: string,
+  init: { method: string; body?: string },
+): Promise<Response> {
+  const exec = async (token: string) =>
+    fetch(url, {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: init.body,
+    });
+  let resp = await exec(await obterTokenTenant(tenantId, creds));
+  if (resp.status === 401) {
+    resp = await exec(await obterTokenTenant(tenantId, creds, true));
+  }
+  return resp;
 }
 
 async function fetchListagemPagina(
@@ -302,8 +381,8 @@ export async function runTenantOemSync(
 
   try {
     const creds = await loadTenantCreds(tenantId);
-    const token = await obterTokenTenant(creds);
-    const tokenHolder = criarTokenHolderTenant(creds, token);
+    const token = await obterTokenTenant(tenantId, creds);
+    const tokenHolder = criarTokenHolderTenant(tenantId, creds, token);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     // ---------- Fase 1: enumerar (codEmpresa, codFilial) via listagem ----------
@@ -462,7 +541,7 @@ export async function runTenantOemSync(
 
 // ============================================================
 // Bloquear / Desbloquear licença diretamente no OEM
-// 1. Token novo (sem cache)
+// 1. Token compartilhado em cache (renova só quando vence ou 401)
 // 2. GET /v1/licenciamento/{emp}/{fil} → body raw
 // 3. PUT mesmo body com bloquearLicenca = true|false
 // 4. Atualiza linha local em clientes_oem para refletir na UI
@@ -475,16 +554,10 @@ export async function alterarStatusLicencaTenant(
 ): Promise<{ ok: true } | { ok: false; mensagem: string }> {
   try {
     const creds = await loadTenantCreds(tenantId);
-    const token = await obterTokenTenant(creds);
     const url = `${creds.baseUrl}/v1/licenciamento/${codEmpresa}/${codFilial}`;
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    } as const;
 
     // ---- GET licença atual (corpo completo, sem unwrap)
-    const getResp = await fetch(url, { method: "GET", headers });
+    const getResp = await fetchOemAutenticado(tenantId, creds, url, { method: "GET" });
     if (!getResp.ok) {
       const preview = await getResp.text().catch(() => "");
       throw new Error(`GET licença OEM HTTP ${getResp.status}: ${preview.slice(0, 180)}`);
@@ -509,9 +582,8 @@ export async function alterarStatusLicencaTenant(
     if (data && typeof data === "object") setFlag(data);
 
     // ---- PUT corpo completo
-    const putResp = await fetch(url, {
+    const putResp = await fetchOemAutenticado(tenantId, creds, url, {
       method: "PUT",
-      headers,
       body: JSON.stringify(raw),
     });
     if (!putResp.ok) {
@@ -587,8 +659,8 @@ export async function repararZeradosTenant(
   }
 
   const creds = await loadTenantCreds(tenantId);
-  const tokenInicial = await obterTokenTenant(creds);
-  const tokenHolder = criarTokenHolderTenant(creds, tokenInicial);
+  const tokenInicial = await obterTokenTenant(tenantId, creds);
+  const tokenHolder = criarTokenHolderTenant(tenantId, creds, tokenInicial);
 
   // Processa em sub-chunks paralelos de 10 (cuidado com rate limit da OEM)
   const CHUNK = 10;
@@ -660,15 +732,9 @@ export async function alterarStatusAtivacaoTenant(
 ): Promise<{ ok: true } | { ok: false; mensagem: string }> {
   try {
     const creds = await loadTenantCreds(tenantId);
-    const token = await obterTokenTenant(creds);
     const url = `${creds.baseUrl}/v1/licenciamento/${codEmpresa}/${codFilial}`;
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    } as const;
 
-    const getResp = await fetch(url, { method: "GET", headers });
+    const getResp = await fetchOemAutenticado(tenantId, creds, url, { method: "GET" });
     if (!getResp.ok) {
       const preview = await getResp.text().catch(() => "");
       throw new Error(`GET licença OEM HTTP ${getResp.status}: ${preview.slice(0, 180)}`);
@@ -697,9 +763,8 @@ export async function alterarStatusAtivacaoTenant(
     const data = (raw.data as Record<string, unknown> | undefined) ?? undefined;
     if (data && typeof data === "object") applyAtivar(data);
 
-    const putResp = await fetch(url, {
+    const putResp = await fetchOemAutenticado(tenantId, creds, url, {
       method: "PUT",
-      headers,
       body: JSON.stringify(raw),
     });
     if (!putResp.ok) {
