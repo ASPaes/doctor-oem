@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useMemo, useDeferredValue } from "react";
-import { Search, RefreshCw, Store, Monitor, ClipboardList, Users, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2 } from "lucide-react";
+import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2 } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { listTenantClientes, runTenantInitialLoad, alterarStatusLicencaOem, alterarStatusAtivacaoOem } from "@/lib/tenant-oem.functions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
