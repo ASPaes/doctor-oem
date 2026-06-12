@@ -64,7 +64,8 @@ function ClienteDetalhe() {
   });
   const syncing = syncMutation.isPending;
 
-  const { isAdminOfActiveTenant } = useRole();
+  const { role } = useRole();
+  const isAdminOfActiveTenant = role === "admin";
   const statusMutation = useMutation({
     mutationFn: (bloquear: boolean) =>
       alterarStatusFn({ data: { tenantId: tenantId!, clienteId: id, bloquear } }),
