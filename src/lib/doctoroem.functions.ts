@@ -729,6 +729,16 @@ export function mapLicenciamentoToRow(
 
   const bloqueado =
     bool(lic.bloquearLicenca ?? lic.BloquearLicenca ?? filialObj?.bloqueado ?? lic.bloqueado ?? lic.Bloqueado) ?? false;
+  // Status operacional do CLIENTE (independente do bloqueio de licença).
+  // filial.status: "AT" = Ativo, "IN" = Inativo/Desativado.
+  const filialStatusRaw = (() => {
+    const s = filialObj?.status ?? lic.statusFilial ?? lic.status;
+    return typeof s === "string" ? s.trim().toUpperCase() : undefined;
+  })();
+  const filialAtivoFlag =
+    bool(filialObj?.ativo ?? lic.ativo) ?? (filialStatusRaw ? filialStatusRaw === "AT" : undefined);
+  const clienteAtivo =
+    filialStatusRaw === "AT" ? true : filialStatusRaw === "IN" ? false : (filialAtivoFlag ?? true);
   const pdvComandas = num(
     filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas,
   );
@@ -739,7 +749,9 @@ export function mapLicenciamentoToRow(
     cnpj_cpf: cpfCnpj ?? `${codEmpresa}/${codFilial}`,
     nome_fantasia: nomeLoja ?? `Empresa ${codEmpresa}/${codFilial}`,
     bloqueado,
-    status: bloqueado ? "Bloqueado" : "Ativo",
+    // Dimensões independentes: status = Ativo/Desativado (operacional do cliente),
+    // bloqueado = licença bloqueada/desbloqueada.
+    status: clienteAtivo ? "Ativo" : "Desativado",
     last_sync: new Date().toISOString(),
   };
 
