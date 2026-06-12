@@ -389,11 +389,9 @@ export async function runTenantOemSync(
             //   que indica apenas bloqueio comercial/licença).
             // - numero_filiais vem do grupo (detalhe não devolve esse campo).
             const blindada = blindarRow(row);
-            // Status operacional: Ativo quando a licença NÃO está bloqueada.
-            // (A flag filial.ativo da listagem se mostrou não confiável neste
-            // tenant — vinha falsa para praticamente todas as filiais, zerando
-            // a contagem de ativos.) Mantemos `bloqueado` como flag separada.
-            blindada.status = blindada.bloqueado ? "Inativo" : "Ativo";
+            // Status do cliente (Ativo/Desativado) vem do detalhe via mapLicenciamentoToRow
+            // (filial.status "AT"/"IN"). `bloqueado` é uma dimensão SEPARADA (licença).
+            // Não sobrescrevemos mais o status a partir de bloqueado.
             if (c.numeroFiliais > 0) blindada.numero_filiais = c.numeroFiliais;
             return { ...blindada, tenant_id: tenantId } as Record<string, unknown>;
           } catch (err) {
