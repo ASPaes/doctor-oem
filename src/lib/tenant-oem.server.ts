@@ -165,28 +165,67 @@ export async function obterTokenTenant(
   forcarNovo = false,
 ): Promise<string> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  // Lê estado atual do cache (token + cooldown)
+  const { data: cache } = await supabaseAdmin
+    .from("oem_token_cache")
+    .select("token, expira_em, cooldown_ate")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
   if (!forcarNovo) {
-    const { data } = await supabaseAdmin
-      .from("oem_token_cache")
-      .select("token, expira_em")
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
-    if (data?.token) {
-      const expira = new Date(data.expira_em).getTime();
+    if (cache?.token && cache.expira_em) {
+      const expira = new Date(cache.expira_em).getTime();
       if (Number.isFinite(expira) && expira - TOKEN_MARGEM_MS > Date.now()) {
-        return data.token;
+        return cache.token;
       }
     }
   }
-  const { token, expiraEm } = await solicitarTokenOem(creds);
-  const { error } = await supabaseAdmin
-    .from("oem_token_cache")
-    .upsert(
-      { tenant_id: tenantId, token, expira_em: expiraEm, atualizado_em: new Date().toISOString() },
-      { onConflict: "tenant_id" },
-    );
-  if (error) console.error("[tenant-oem] falha ao salvar cache de token:", error.message);
-  return token;
+  // Cooldown ativo? Aborta sem tocar no /token (evita amplificar o 429).
+  if (cache?.cooldown_ate) {
+    const ate = new Date(cache.cooldown_ate).getTime();
+    if (Number.isFinite(ate) && ate > Date.now()) {
+      const segundos = Math.ceil((ate - Date.now()) / 1000);
+      throw new Error(
+        `OEM bloqueou as requisições por excesso de tentativas. Aguarde ${segundos}s e tente novamente.`,
+      );
+    }
+  }
+  try {
+    const { token, expiraEm } = await solicitarTokenOem(creds);
+    const { error } = await supabaseAdmin
+      .from("oem_token_cache")
+      .upsert(
+        {
+          tenant_id: tenantId,
+          token,
+          expira_em: expiraEm,
+          cooldown_ate: null,
+          atualizado_em: new Date().toISOString(),
+        },
+        { onConflict: "tenant_id" },
+      );
+    if (error) console.error("[tenant-oem] falha ao salvar cache de token:", error.message);
+    return token;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Se o /token devolveu 429, registra cooldown de 60s para que cliques
+    // subsequentes não voltem a martelar o provedor.
+    if (/HTTP 429/.test(msg)) {
+      const ate = new Date(Date.now() + 60_000).toISOString();
+      await supabaseAdmin
+        .from("oem_token_cache")
+        .upsert(
+          {
+            tenant_id: tenantId,
+            token: cache?.token ?? null,
+            expira_em: cache?.expira_em ?? null,
+            cooldown_ate: ate,
+            atualizado_em: new Date().toISOString(),
+          },
+          { onConflict: "tenant_id" },
+        );
+    }
+    throw e;
+  }
 }
 
 // Holder mutável: permite que fetchLicenciamentoOem renove o token quando a

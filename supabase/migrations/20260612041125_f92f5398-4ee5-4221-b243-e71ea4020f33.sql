@@ -1,0 +1,1 @@
+ALTER TABLE public.oem_token_cache ALTER COLUMN token DROP NOT NULL; ALTER TABLE public.oem_token_cache ALTER COLUMN expira_em DROP NOT NULL; ALTER TABLE public.oem_token_cache ADD COLUMN IF NOT EXISTS cooldown_ate timestamptz;
