@@ -458,3 +458,83 @@ export async function runTenantOemSync(
     return result;
   }
 }
+
+// ============================================================
+// Bloquear / Desbloquear licença diretamente no OEM
+// 1. Token novo (sem cache)
+// 2. GET /v1/licenciamento/{emp}/{fil} → body raw
+// 3. PUT mesmo body com bloquearLicenca = true|false
+// 4. Atualiza linha local em clientes_oem para refletir na UI
+// ============================================================
+export async function alterarStatusLicencaTenant(
+  tenantId: string,
+  codEmpresa: number,
+  codFilial: number,
+  bloquear: boolean,
+): Promise<{ ok: true } | { ok: false; mensagem: string }> {
+  try {
+    const creds = await loadTenantCreds(tenantId);
+    const token = await obterTokenTenant(creds);
+    const url = `${creds.baseUrl}/v1/licenciamento/${codEmpresa}/${codFilial}`;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    } as const;
+
+    // ---- GET licença atual (corpo completo, sem unwrap)
+    const getResp = await fetch(url, { method: "GET", headers });
+    if (!getResp.ok) {
+      const preview = await getResp.text().catch(() => "");
+      throw new Error(`GET licença OEM HTTP ${getResp.status}: ${preview.slice(0, 180)}`);
+    }
+    const raw = (await getResp.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!raw || typeof raw !== "object") {
+      throw new Error("GET licença OEM retornou payload inválido.");
+    }
+
+    // ---- Aplica a flag no objeto certo (pode vir embrulhado em response.data/data)
+    const setFlag = (obj: Record<string, unknown>) => {
+      obj.bloquearLicenca = bloquear;
+    };
+    setFlag(raw);
+    const response = (raw.response as Record<string, unknown> | undefined) ?? undefined;
+    if (response && typeof response === "object") {
+      setFlag(response);
+      const respData = (response.data as Record<string, unknown> | undefined) ?? undefined;
+      if (respData && typeof respData === "object") setFlag(respData);
+    }
+    const data = (raw.data as Record<string, unknown> | undefined) ?? undefined;
+    if (data && typeof data === "object") setFlag(data);
+
+    // ---- PUT corpo completo
+    const putResp = await fetch(url, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(raw),
+    });
+    if (!putResp.ok) {
+      const preview = await putResp.text().catch(() => "");
+      throw new Error(`PUT licença OEM HTTP ${putResp.status}: ${preview.slice(0, 180)}`);
+    }
+
+    // ---- Reflete imediatamente no Supabase (sem esperar a sync)
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin
+      .from("clientes_oem")
+      .update({
+        bloqueado: bloquear,
+        motivo_bloqueio: bloquear ? "Bloqueio manual via Nexus Hub" : null,
+      })
+      .eq("tenant_id", tenantId)
+      .eq("empresa_codigo", String(codEmpresa))
+      .eq("filial_codigo", String(codFilial));
+    if (error) {
+      console.error("[tenant-oem] OEM atualizado, mas falha ao refletir local:", error.message);
+    }
+
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, mensagem: e instanceof Error ? e.message : String(e) };
+  }
+}
