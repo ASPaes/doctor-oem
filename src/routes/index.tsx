@@ -92,7 +92,7 @@ function Index() {
   const kpis = [
     { label: "Clientes Ativos", value: `${ativos}/${total}`, sub: `${inativos} inativos`, icon: Building2, accent: "text-primary" },
     canSeeFinance
-      ? { label: "Receita Recorrente", value: formatBRL(receita), sub: `${total} contratos`, icon: TrendingUp, accent: "text-accent" }
+      ? { label: "Custo Recorrente", value: formatBRL(receita), sub: `${total} contratos`, icon: TrendingUp, accent: "text-accent" }
       : { label: "Filiais Ativas", value: String(totalFiliais), sub: `${totalPdvs} PDVs`, icon: Store, accent: "text-accent" },
     { label: "Bloqueios", value: String(bloqueados), sub: bloqueados ? "exige ação" : "tudo ok", icon: ShieldAlert, accent: bloqueados ? "text-destructive" : "text-success" },
     {
@@ -200,7 +200,7 @@ function Index() {
         {canSeeFinance && (
           <section className="glass-panel rounded-2xl">
             <header className="flex items-center justify-between border-b border-border px-5 py-4">
-              <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Top grupos por receita</h2>
+              <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Top grupos por custo</h2>
               <Link to="/clientes" className="text-xs text-primary hover:underline">ver todos</Link>
             </header>
             {topGrupos.length === 0 ? (

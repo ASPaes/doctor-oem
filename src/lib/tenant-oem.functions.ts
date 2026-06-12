@@ -96,13 +96,25 @@ export const listTenantClientes = createServerFn({ method: "POST" })
       _tenant_id: data.tenantId,
     });
     if (!hasAccess) throw new Error("Sem acesso a esta empresa.");
-    const { data: rows, error } = await supabase
-      .from("clientes_oem")
-      .select("*")
-      .eq("tenant_id", data.tenantId)
-      .order("nome_fantasia", { ascending: true });
-    if (error) throw new Error(error.message);
-    return (rows ?? []).map((r) => mapClienteOem(r as unknown as ClienteOemRow));
+    // Paginar para evitar o limite default de 1000 linhas do PostgREST
+    const pageSize = 1000;
+    let from = 0;
+    const all: ClienteOemRow[] = [];
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { data: rows, error } = await supabase
+        .from("clientes_oem")
+        .select("*")
+        .eq("tenant_id", data.tenantId)
+        .order("nome_fantasia", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw new Error(error.message);
+      const batch = (rows ?? []) as unknown as ClienteOemRow[];
+      all.push(...batch);
+      if (batch.length < pageSize) break;
+      from += pageSize;
+    }
+    return all.map(mapClienteOem);
   });
 
 export const getTenantCliente = createServerFn({ method: "POST" })
