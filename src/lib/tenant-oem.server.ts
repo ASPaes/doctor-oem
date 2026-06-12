@@ -114,8 +114,8 @@ async function loadTenantCreds(tenantId: string): Promise<TenantCreds> {
 // Margem de segurança antes do vencimento do token (renova 2 min antes).
 const TOKEN_MARGEM_MS = 120_000;
 
-// Solicita um token NOVO à API OEM, com retry/backoff em caso de 429
-// (a OEM limita requisições ao endpoint /token).
+// Solicita um token NOVO à API OEM. IMPORTANTE: faz UMA única tentativa —
+// quando o /token responde 429, repetir só amplia o bloqueio do provedor.
 async function solicitarTokenOem(
   creds: TenantCreds,
 ): Promise<{ token: string; expiraEm: string }> {
@@ -126,35 +126,24 @@ async function solicitarTokenOem(
     client_id: creds.clientId,
     client_secret: creds.clientSecret,
   });
-  const MAX_TENTATIVAS = 3;
-  let ultimaMensagem = "Falha na autenticação OEM.";
-  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
-    const resp = await fetch(`${creds.baseUrl}/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: body.toString(),
-    });
-    if (resp.ok) {
-      const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-      const token = typeof json.access_token === "string" ? json.access_token : null;
-      if (!token) throw new Error("Resposta de token sem access_token.");
-      const expiresIn = Number(json.expires_in);
-      const vidaMs = (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600) * 1000;
-      return { token, expiraEm: new Date(Date.now() + vidaMs).toISOString() };
-    }
-    const preview = await resp.text().catch(() => "");
-    ultimaMensagem = `Falha na autenticação OEM (HTTP ${resp.status}): ${preview.slice(0, 180)}`;
-    // 429 = rate limit no /token → aguarda e tenta de novo (backoff progressivo).
-    if (resp.status === 429 && tentativa < MAX_TENTATIVAS) {
-      await new Promise((r) => setTimeout(r, 5000 * tentativa));
-      continue;
-    }
-    throw new Error(ultimaMensagem);
+  const resp = await fetch(`${creds.baseUrl}/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: body.toString(),
+  });
+  if (resp.ok) {
+    const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+    const token = typeof json.access_token === "string" ? json.access_token : null;
+    if (!token) throw new Error("Resposta de token sem access_token.");
+    const expiresIn = Number(json.expires_in);
+    const vidaMs = (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600) * 1000;
+    return { token, expiraEm: new Date(Date.now() + vidaMs).toISOString() };
   }
-  throw new Error(ultimaMensagem);
+  const preview = await resp.text().catch(() => "");
+  throw new Error(`Falha na autenticação OEM (HTTP ${resp.status}): ${preview.slice(0, 180)}`);
 }
 
 // Token com CACHE compartilhado (tabela oem_token_cache, acesso só do servidor).
