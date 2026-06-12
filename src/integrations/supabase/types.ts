@@ -179,6 +179,35 @@ export type Database = {
           },
         ]
       }
+      oem_token_cache: {
+        Row: {
+          atualizado_em: string
+          expira_em: string
+          tenant_id: string
+          token: string
+        }
+        Insert: {
+          atualizado_em?: string
+          expira_em: string
+          tenant_id: string
+          token: string
+        }
+        Update: {
+          atualizado_em?: string
+          expira_em?: string
+          tenant_id?: string
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oem_token_cache_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenant_members: {
         Row: {
           created_at: string
