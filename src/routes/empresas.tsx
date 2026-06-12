@@ -327,3 +327,66 @@ function CargaInicialButton({ tenantId, tenantNome }: { tenantId: string; tenant
     </Button>
   );
 }
+
+function EditTenantDialog({ tenant }: { tenant: { id: string; nome: string; cnpj: string | null } }) {
+  const qc = useQueryClient();
+  const update = useServerFn(updateTenant);
+  const [open, setOpen] = useState(false);
+  const [nome, setNome] = useState(tenant.nome);
+  const [cnpj, setCnpj] = useState(tenant.cnpj ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setNome(tenant.nome);
+      setCnpj(tenant.cnpj ?? "");
+    }
+  }, [open, tenant.nome, tenant.cnpj]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-2">
+          <Pencil className="h-3.5 w-3.5" /> Editar
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Editar empresa</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Nome</Label>
+            <Input value={nome} onChange={(e) => setNome(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>CNPJ</Label>
+            <Input value={cnpj} onChange={(e) => setCnpj(e.target.value)} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            O slug (identificador) não pode ser alterado após o cadastro.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button
+            disabled={saving || !nome}
+            onClick={async () => {
+              try {
+                setSaving(true);
+                await update({ data: { id: tenant.id, nome, cnpj: cnpj || null } });
+                toast.success("Empresa atualizada");
+                qc.invalidateQueries({ queryKey: ["empresas", "all"] });
+                qc.invalidateQueries({ queryKey: ["my-tenants"] });
+                setOpen(false);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Falha ao atualizar");
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? "Salvando…" : "Salvar"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
