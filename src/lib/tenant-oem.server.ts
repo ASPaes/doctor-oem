@@ -268,11 +268,36 @@ export async function testTenantConnection(
 ): Promise<{ ok: true; baseUrl: string } | { ok: false; mensagem: string }> {
   try {
     const creds = await loadTenantCreds(tenantId);
-    await obterTokenTenant(creds);
+    await obterTokenTenant(tenantId, creds, true);
     return { ok: true, baseUrl: creds.baseUrl };
   } catch (e) {
     return { ok: false, mensagem: e instanceof Error ? e.message : String(e) };
   }
+}
+
+// Faz uma chamada autenticada à API OEM usando o token em cache;
+// se o OEM responder 401 (token vencido/invalidado), renova UMA vez e repete.
+async function fetchOemAutenticado(
+  tenantId: string,
+  creds: TenantCreds,
+  url: string,
+  init: { method: string; body?: string },
+): Promise<Response> {
+  const exec = async (token: string) =>
+    fetch(url, {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: init.body,
+    });
+  let resp = await exec(await obterTokenTenant(tenantId, creds));
+  if (resp.status === 401) {
+    resp = await exec(await obterTokenTenant(tenantId, creds, true));
+  }
+  return resp;
 }
 
 async function fetchListagemPagina(
