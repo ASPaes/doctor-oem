@@ -247,7 +247,7 @@ function ClientesList() {
             </tr>
           </thead>
           <tbody className="[&_tr:last-child]:border-0">
-            {list.map((c) => (
+            {pageList.map((c) => (
               <tr
                 key={c.id}
                 className="border-b transition-colors hover:bg-muted/50"
@@ -301,6 +301,37 @@ function ClientesList() {
           </div>
         )}
       </div>
+
+      {list.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-muted-foreground">
+            Mostrando {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, list.length)} de {list.length} clientes
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" /> Anterior
+            </Button>
+            <span className="text-sm text-muted-foreground tabular-nums">
+              Página {safePage} de {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="gap-1"
+            >
+              Próxima <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
