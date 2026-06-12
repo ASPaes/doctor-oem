@@ -32,7 +32,7 @@ export const Route = createFileRoute("/clientes/")({
 
 function ClientesList() {
   const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string[]>(["ativo", "inativo", "bloqueado"]);
+  const [statusFilter, setStatusFilter] = useState<string[]>(["ativo"]);
   const { canSeeFinance } = useRole();
   const { activeTenant, loading: tenantLoading } = useTenant();
   const tenantId = activeTenant?.id ?? null;
