@@ -221,6 +221,51 @@ export const alterarStatusLicencaOem = createServerFn({ method: "POST" })
     return { ok: true as const, bloqueado: data.bloquear };
   });
 
+// ----- Ativar / Desativar cliente no OEM (admin do tenant) -----
+export const alterarStatusAtivacaoOem = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        tenantId: z.string().uuid(),
+        clienteId: z.string().uuid(),
+        ativar: z.boolean(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: isAdmin } = await supabase.rpc("is_tenant_admin", {
+      _user_id: userId,
+      _tenant_id: data.tenantId,
+    });
+    if (!isAdmin) {
+      throw new Error("Apenas administradores podem ativar/desativar clientes.");
+    }
+    const { data: row, error } = await supabase
+      .from("clientes_oem")
+      .select("empresa_codigo, filial_codigo")
+      .eq("tenant_id", data.tenantId)
+      .eq("id", data.clienteId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!row) throw new Error("Cliente não encontrado nesta empresa.");
+    const codEmpresa = Number(row.empresa_codigo);
+    const codFilial = Number(row.filial_codigo);
+    if (!Number.isFinite(codEmpresa) || !Number.isFinite(codFilial)) {
+      throw new Error("Cliente sem codEmpresa/codFilial válidos para chamar o OEM.");
+    }
+    const { alterarStatusAtivacaoTenant } = await import("@/lib/tenant-oem.server");
+    const result = await alterarStatusAtivacaoTenant(
+      data.tenantId,
+      codEmpresa,
+      codFilial,
+      data.ativar,
+    );
+    if (!result.ok) throw new Error(result.mensagem);
+    return { ok: true as const, ativo: data.ativar };
+  });
+
 // ----- Settings de automação por tenant (intervalo + ativo) + logs -----
 export type TenantSyncLog = {
   id: string;
