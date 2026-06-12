@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
-import { Search, RefreshCw, Store, Monitor, ClipboardList, Users, DollarSign, Activity } from "lucide-react";
+import { useState, useMemo, useDeferredValue } from "react";
+import { Search, RefreshCw, Store, Monitor, ClipboardList, Users, DollarSign, Activity, ChevronLeft, ChevronRight } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { listTenantClientes, runTenantInitialLoad } from "@/lib/tenant-oem.functions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -34,6 +34,11 @@ export const Route = createFileRoute("/clientes/")({
 function ClientesList() {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState<string[]>(["ativo"]);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 100;
+  // Valores adiados: o clique no filtro responde na hora e a tabela pesada re-renderiza depois
+  const deferredQ = useDeferredValue(q);
+  const deferredStatus = useDeferredValue(statusFilter);
   const scrollRef = useHorizontalDragScroll<HTMLDivElement>();
   const { canSeeFinance } = useRole();
   const { activeTenant, loading: tenantLoading } = useTenant();
@@ -55,40 +60,54 @@ function ClientesList() {
     onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
   });
 
+  const list = useMemo(() => {
+    const term = deferredQ.trim().toLowerCase();
+    return clientes.filter((c) => {
+      const status = c.bloqueado ? "bloqueado" : c.ativo ? "ativo" : "inativo";
+      if (deferredStatus.length > 0 && !deferredStatus.includes(status)) return false;
+      if (!term) return true;
+      return (
+        c.nomeFantasia.toLowerCase().includes(term) ||
+        c.cnpj.includes(term) ||
+        c.grupoEconomico.toLowerCase().includes(term) ||
+        (c.codigoEmpresa ?? "").toLowerCase().includes(term) ||
+        (c.codigoFilial ?? "").toLowerCase().includes(term)
+      );
+    });
+  }, [clientes, deferredQ, deferredStatus]);
+
+  const totals = useMemo(
+    () =>
+      list.reduce(
+        (acc, c) => {
+          acc.filiais += c.filiaisAtivas;
+          acc.pdvs += c.qtdPdv;
+          acc.comandas += c.qtdComandas;
+          acc.usuarios += c.usuariosAdicionais;
+          acc.custo += c.custoMensal;
+          if (c.bloqueado) acc.bloqueados++;
+          else if (c.ativo) acc.ativos++;
+          else acc.inativos++;
+          return acc;
+        },
+        { filiais: 0, pdvs: 0, comandas: 0, usuarios: 0, custo: 0, ativos: 0, inativos: 0, bloqueados: 0 },
+      ),
+    [list],
+  );
+
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageList = useMemo(
+    () => list.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [list, safePage],
+  );
+
   if (tenantLoading || !tenantId) {
     return <div className="p-10 text-center text-muted-foreground">Selecione uma empresa no topo…</div>;
   }
   if (isLoading) {
     return <div className="p-10 text-center text-muted-foreground">Carregando clientes…</div>;
   }
-  const term = q.trim().toLowerCase();
-  const list = clientes.filter((c) => {
-    const status = c.bloqueado ? "bloqueado" : c.ativo ? "ativo" : "inativo";
-    if (statusFilter.length > 0 && !statusFilter.includes(status)) return false;
-    if (!term) return true;
-    return (
-      c.nomeFantasia.toLowerCase().includes(term) ||
-      c.cnpj.includes(term) ||
-      c.grupoEconomico.toLowerCase().includes(term) ||
-      (c.codigoEmpresa ?? "").toLowerCase().includes(term) ||
-      (c.codigoFilial ?? "").toLowerCase().includes(term)
-    );
-  });
-
-  const totals = list.reduce(
-    (acc, c) => {
-      acc.filiais += c.filiaisAtivas;
-      acc.pdvs += c.qtdPdv;
-      acc.comandas += c.qtdComandas;
-      acc.usuarios += c.usuariosAdicionais;
-      acc.custo += c.custoMensal;
-      if (c.bloqueado) acc.bloqueados++;
-      else if (c.ativo) acc.ativos++;
-      else acc.inativos++;
-      return acc;
-    },
-    { filiais: 0, pdvs: 0, comandas: 0, usuarios: 0, custo: 0, ativos: 0, inativos: 0, bloqueados: 0 },
-  );
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
@@ -104,7 +123,10 @@ function ClientesList() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setPage(1);
+            }}
             placeholder="Buscar por nome, CNPJ, grupo, cód. empresa ou filial"
             className="pl-9 glass-panel border-border"
           />
@@ -124,7 +146,10 @@ function ClientesList() {
         <ToggleGroup
           type="multiple"
           value={statusFilter}
-          onValueChange={setStatusFilter}
+          onValueChange={(v) => {
+            setStatusFilter(v);
+            setPage(1);
+          }}
           variant="outline"
           size="sm"
         >
@@ -222,7 +247,7 @@ function ClientesList() {
             </tr>
           </thead>
           <tbody className="[&_tr:last-child]:border-0">
-            {list.map((c) => (
+            {pageList.map((c) => (
               <tr
                 key={c.id}
                 className="border-b transition-colors hover:bg-muted/50"
@@ -276,6 +301,37 @@ function ClientesList() {
           </div>
         )}
       </div>
+
+      {list.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-muted-foreground">
+            Mostrando {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, list.length)} de {list.length} clientes
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" /> Anterior
+            </Button>
+            <span className="text-sm text-muted-foreground tabular-nums">
+              Página {safePage} de {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="gap-1"
+            >
+              Próxima <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
