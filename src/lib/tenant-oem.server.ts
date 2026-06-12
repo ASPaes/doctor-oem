@@ -371,14 +371,14 @@ export async function runTenantOemSync(
 
       // Busca o detalhe em paralelo dentro do chunk (25 conexões simultâneas
       // é confortável para a API OEM). Fallback para o resumo se 404/erro.
-      const detalhados = await Promise.all(
+      const detalhados: Array<Record<string, unknown> | null> = await Promise.all(
         lote.map(async (c) => {
           try {
             const detalhe = await fetchLicenciamentoOem(tokenHolder, c.codEmpresa, c.codFilial);
             const payload = detalhe ?? c.resumo;
             const row = mapLicenciamentoToRow(payload, c.codEmpresa, c.codFilial);
             if (!row) return null;
-            return { ...blindarRow(row), tenant_id: tenantId };
+            return { ...blindarRow(row), tenant_id: tenantId } as Record<string, unknown>;
           } catch (err) {
             console.error(
               `[tenant-oem] falha ao buscar detalhe ${c.codEmpresa}/${c.codFilial}:`,
