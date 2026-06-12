@@ -182,21 +182,24 @@ export type Database = {
       oem_token_cache: {
         Row: {
           atualizado_em: string
-          expira_em: string
+          cooldown_ate: string | null
+          expira_em: string | null
           tenant_id: string
-          token: string
+          token: string | null
         }
         Insert: {
           atualizado_em?: string
-          expira_em: string
+          cooldown_ate?: string | null
+          expira_em?: string | null
           tenant_id: string
-          token: string
+          token?: string | null
         }
         Update: {
           atualizado_em?: string
-          expira_em?: string
+          cooldown_ate?: string | null
+          expira_em?: string | null
           tenant_id?: string
-          token?: string
+          token?: string | null
         }
         Relationships: [
           {
