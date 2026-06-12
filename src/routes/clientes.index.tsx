@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState, useMemo, useDeferredValue } from "react";
+import { useState, useMemo, useDeferredValue, useTransition } from "react";
 import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2 } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { listTenantClientes, runTenantInitialLoad, alterarStatusLicencaOem, alterarStatusAtivacaoOem } from "@/lib/tenant-oem.functions";
@@ -39,6 +39,7 @@ function ClientesList() {
   const [licencaFilter, setLicencaFilter] = useState<string[]>(["ativa", "bloqueada"]);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 100;
+  const [, startTransition] = useTransition();
   // Valores adiados: o clique no filtro responde na hora e a tabela pesada re-renderiza depois
   const deferredQ = useDeferredValue(q);
   const deferredCliente = useDeferredValue(clienteFilter);
@@ -110,9 +111,10 @@ function ClientesList() {
     });
   }, [clientes, deferredQ, deferredCliente, deferredLicenca]);
 
+  // Cards refletem o resultado FILTRADO (não a base inteira)
   const totals = useMemo(
     () =>
-      clientes.reduce(
+      list.reduce(
         (acc, c) => {
           if (c.ativo && !c.bloqueado) acc.ativoLicAtiva++;
           else if (c.ativo && c.bloqueado) acc.ativoLicBloqueada++;
@@ -122,7 +124,7 @@ function ClientesList() {
         },
         { ativoLicAtiva: 0, ativoLicBloqueada: 0, desativadoLicAtiva: 0, desativadoLicBloqueada: 0 },
       ),
-    [clientes],
+    [list],
   );
 
   const pageTotals = useMemo(
@@ -193,7 +195,7 @@ function ClientesList() {
           <ToggleGroup
             type="multiple"
             value={clienteFilter}
-            onValueChange={(v) => { setClienteFilter(v); setPage(1); }}
+            onValueChange={(v) => startTransition(() => { setClienteFilter(v); setPage(1); })}
             variant="outline"
             size="sm"
           >
@@ -206,7 +208,7 @@ function ClientesList() {
           <ToggleGroup
             type="multiple"
             value={licencaFilter}
-            onValueChange={(v) => { setLicencaFilter(v); setPage(1); }}
+            onValueChange={(v) => startTransition(() => { setLicencaFilter(v); setPage(1); })}
             variant="outline"
             size="sm"
           >
