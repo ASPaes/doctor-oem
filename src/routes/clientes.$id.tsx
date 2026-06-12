@@ -120,7 +120,7 @@ function ClienteDetalhe() {
         <div className="flex items-center gap-2 flex-wrap">
           {isAdminOfActiveTenant && (
             <>
-            cliente.bloqueado ? (
+            {cliente.bloqueado ? (
               <Button
                 onClick={() => statusMutation.mutate(false)}
                 disabled={anyBusy}
@@ -154,8 +154,7 @@ function ClienteDetalhe() {
                 )}
                 {statusLoading ? "Bloqueando..." : "Bloquear Licença"}
               </Button>
-            )
-            }
+            )}
             {cliente.ativo ? (
               <Button
                 onClick={() => {
