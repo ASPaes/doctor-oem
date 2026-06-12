@@ -310,6 +310,8 @@ export async function runTenantOemSync(
     const candidatos: Array<{
       codEmpresa: number;
       codFilial: number;
+      filialAtivo: boolean;
+      numeroFiliais: number;
       resumo: Record<string, unknown>;
     }> = [];
     const seen = new Set<string>();
@@ -327,6 +329,8 @@ export async function runTenantOemSync(
       for (const grupo of grupos) {
         const codEmpresa = toNumber(grupo.codGrupo);
         if (codEmpresa == null) continue;
+        const numFiliais =
+          (grupo.qtdLojasAtivas ?? 0) + (grupo.qtdLojasDesativadas ?? 0);
         const filiais =
           Array.isArray(grupo.filiais) && grupo.filiais.length ? grupo.filiais : [undefined];
         for (const filial of filiais) {
@@ -338,6 +342,8 @@ export async function runTenantOemSync(
           candidatos.push({
             codEmpresa,
             codFilial,
+            filialAtivo: filial?.ativo ?? grupo.ativo ?? true,
+            numeroFiliais: numFiliais,
             resumo: buildResumoFallback(grupo, filial),
           });
         }
@@ -378,7 +384,15 @@ export async function runTenantOemSync(
             const payload = detalhe ?? c.resumo;
             const row = mapLicenciamentoToRow(payload, c.codEmpresa, c.codFilial);
             if (!row) return null;
-            return { ...blindarRow(row), tenant_id: tenantId } as Record<string, unknown>;
+            // Sobrescreve com fonte autoritativa da LISTAGEM:
+            // - status operacional vem de filial.ativo (NÃO de bloquearLicenca,
+            //   que indica apenas bloqueio comercial/licença).
+            // - numero_filiais vem do grupo (detalhe não devolve esse campo).
+            const blindada = blindarRow(row);
+            blindada.status = c.filialAtivo ? "Ativo" : "Inativo";
+            // mantém row.bloqueado (bloquearLicenca) como flag independente
+            if (c.numeroFiliais > 0) blindada.numero_filiais = c.numeroFiliais;
+            return { ...blindada, tenant_id: tenantId } as Record<string, unknown>;
           } catch (err) {
             console.error(
               `[tenant-oem] falha ao buscar detalhe ${c.codEmpresa}/${c.codFilial}:`,
