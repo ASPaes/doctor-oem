@@ -554,16 +554,10 @@ export async function alterarStatusLicencaTenant(
 ): Promise<{ ok: true } | { ok: false; mensagem: string }> {
   try {
     const creds = await loadTenantCreds(tenantId);
-    const token = await obterTokenTenant(creds);
     const url = `${creds.baseUrl}/v1/licenciamento/${codEmpresa}/${codFilial}`;
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    } as const;
 
     // ---- GET licença atual (corpo completo, sem unwrap)
-    const getResp = await fetch(url, { method: "GET", headers });
+    const getResp = await fetchOemAutenticado(tenantId, creds, url, { method: "GET" });
     if (!getResp.ok) {
       const preview = await getResp.text().catch(() => "");
       throw new Error(`GET licença OEM HTTP ${getResp.status}: ${preview.slice(0, 180)}`);
@@ -588,9 +582,8 @@ export async function alterarStatusLicencaTenant(
     if (data && typeof data === "object") setFlag(data);
 
     // ---- PUT corpo completo
-    const putResp = await fetch(url, {
+    const putResp = await fetchOemAutenticado(tenantId, creds, url, {
       method: "PUT",
-      headers,
       body: JSON.stringify(raw),
     });
     if (!putResp.ok) {
@@ -666,8 +659,8 @@ export async function repararZeradosTenant(
   }
 
   const creds = await loadTenantCreds(tenantId);
-  const tokenInicial = await obterTokenTenant(creds);
-  const tokenHolder = criarTokenHolderTenant(creds, tokenInicial);
+  const tokenInicial = await obterTokenTenant(tenantId, creds);
+  const tokenHolder = criarTokenHolderTenant(tenantId, creds, tokenInicial);
 
   // Processa em sub-chunks paralelos de 10 (cuidado com rate limit da OEM)
   const CHUNK = 10;
@@ -739,15 +732,9 @@ export async function alterarStatusAtivacaoTenant(
 ): Promise<{ ok: true } | { ok: false; mensagem: string }> {
   try {
     const creds = await loadTenantCreds(tenantId);
-    const token = await obterTokenTenant(creds);
     const url = `${creds.baseUrl}/v1/licenciamento/${codEmpresa}/${codFilial}`;
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    } as const;
 
-    const getResp = await fetch(url, { method: "GET", headers });
+    const getResp = await fetchOemAutenticado(tenantId, creds, url, { method: "GET" });
     if (!getResp.ok) {
       const preview = await getResp.text().catch(() => "");
       throw new Error(`GET licença OEM HTTP ${getResp.status}: ${preview.slice(0, 180)}`);
@@ -776,9 +763,8 @@ export async function alterarStatusAtivacaoTenant(
     const data = (raw.data as Record<string, unknown> | undefined) ?? undefined;
     if (data && typeof data === "object") applyAtivar(data);
 
-    const putResp = await fetch(url, {
+    const putResp = await fetchOemAutenticado(tenantId, creds, url, {
       method: "PUT",
-      headers,
       body: JSON.stringify(raw),
     });
     if (!putResp.ok) {
