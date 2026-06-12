@@ -541,7 +541,7 @@ export async function runTenantOemSync(
 
 // ============================================================
 // Bloquear / Desbloquear licença diretamente no OEM
-// 1. Token novo (sem cache)
+// 1. Token compartilhado em cache (renova só quando vence ou 401)
 // 2. GET /v1/licenciamento/{emp}/{fil} → body raw
 // 3. PUT mesmo body com bloquearLicenca = true|false
 // 4. Atualiza linha local em clientes_oem para refletir na UI
