@@ -2,9 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Search, RefreshCw, Store, Monitor, ClipboardList, Users, DollarSign, Activity } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
-import { listClientes, bulkSyncClientes } from "@/lib/doctoroem.functions";
-import { queryOptions, useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { listTenantClientes, runTenantInitialLoad } from "@/lib/tenant-oem.functions";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useTenant } from "@/lib/tenant-context";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,11 +14,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useRole } from "@/lib/role-context";
 import { toast } from "sonner";
 
-const clientesQueryOptions = queryOptions({
-  queryKey: ["doctoroem", "clientes"],
-  queryFn: () => listClientes(),
-});
-
 export const Route = createFileRoute("/clientes/")({
   head: () => ({
     meta: [
@@ -25,7 +21,6 @@ export const Route = createFileRoute("/clientes/")({
       { name: "description", content: "Lista completa de clientes, status operacional e custos mensais." },
     ],
   }),
-  loader: ({ context }) => context.queryClient.ensureQueryData(clientesQueryOptions),
   component: ClientesList,
   pendingComponent: () => (
     <div className="p-10 text-center text-muted-foreground">Carregando clientes do DoctorOEM…</div>
@@ -39,19 +34,31 @@ function ClientesList() {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState<string[]>(["ativo", "inativo", "bloqueado"]);
   const { canSeeFinance } = useRole();
-  const { data: clientes } = useSuspenseQuery(clientesQueryOptions);
+  const { activeTenant, loading: tenantLoading } = useTenant();
+  const tenantId = activeTenant?.id ?? null;
   const queryClient = useQueryClient();
-  const bulkSync = useServerFn(bulkSyncClientes);
+  const listFn = useServerFn(listTenantClientes);
+  const runLoad = useServerFn(runTenantInitialLoad);
+  const { data: clientes = [], isLoading } = useQuery({
+    queryKey: ["tenant-clientes", tenantId],
+    queryFn: () => listFn({ data: { tenantId: tenantId! } }),
+    enabled: !!tenantId,
+  });
   const syncMutation = useMutation({
-    mutationFn: () => bulkSync(),
-    onSuccess: (res) => {
-      toast.success(
-        `🎉 Carga total concluída! ${res.updated} cliente(s) atualizado(s), ${res.inserted} novo(s) capturado(s) na varredura (${res.scanned} consultas ao OEM).`,
-      );
-      queryClient.invalidateQueries({ queryKey: ["doctoroem", "clientes"] });
+    mutationFn: () => runLoad({ data: { tenantId: tenantId!, origem: "manual" } }),
+    onSuccess: () => {
+      toast.success("Sincronização disparada — rodando em segundo plano. Acompanhe em Configurações.");
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
     },
     onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
   });
+
+  if (tenantLoading || !tenantId) {
+    return <div className="p-10 text-center text-muted-foreground">Selecione uma empresa no topo…</div>;
+  }
+  if (isLoading) {
+    return <div className="p-10 text-center text-muted-foreground">Carregando clientes…</div>;
+  }
   const term = q.trim().toLowerCase();
   const list = clientes.filter((c) => {
     const status = c.bloqueado ? "bloqueado" : c.ativo ? "ativo" : "inativo";

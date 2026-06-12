@@ -2,19 +2,11 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Building2, ShieldAlert, CircuitBoard, ArrowUpRight, TrendingUp, Store, Monitor, AlertCircle, CheckCircle2, Clock } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
 import { Badge } from "@/components/ui/badge";
-import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
-import { listClientes } from "@/lib/doctoroem.functions";
-import { getSyncSettings } from "@/lib/oem-sync.functions";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { listTenantClientes, getTenantSyncSettings } from "@/lib/tenant-oem.functions";
 import { useRole } from "@/lib/role-context";
-
-const clientesQO = queryOptions({
-  queryKey: ["doctoroem", "clientes"],
-  queryFn: () => listClientes(),
-});
-const syncQO = queryOptions({
-  queryKey: ["oem", "sync-settings"],
-  queryFn: () => getSyncSettings(),
-});
+import { useTenant } from "@/lib/tenant-context";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -25,12 +17,6 @@ export const Route = createFileRoute("/")({
       { property: "og:description", content: "Painel consolidado com clientes ativos, custo recorrente e status da sincronização com o OEM." },
     ],
   }),
-  loader: async ({ context }) => {
-    await Promise.all([
-      context.queryClient.ensureQueryData(clientesQO),
-      context.queryClient.ensureQueryData(syncQO),
-    ]);
-  },
   component: Index,
   pendingComponent: () => (
     <div className="p-10 text-center text-muted-foreground">Carregando visão geral…</div>
@@ -53,8 +39,25 @@ function formatRelativo(iso: string): string {
 
 function Index() {
   const { canSeeFinance } = useRole();
-  const { data: clientes } = useSuspenseQuery(clientesQO);
-  const { data: sync } = useSuspenseQuery(syncQO);
+  const { activeTenant, loading: tenantLoading } = useTenant();
+  const tenantId = activeTenant?.id ?? null;
+  const listFn = useServerFn(listTenantClientes);
+  const syncFn = useServerFn(getTenantSyncSettings);
+
+  const { data: clientes = [] } = useQuery({
+    queryKey: ["tenant-clientes", tenantId],
+    queryFn: () => listFn({ data: { tenantId: tenantId! } }),
+    enabled: !!tenantId,
+  });
+  const { data: sync } = useQuery({
+    queryKey: ["tenant-sync", tenantId],
+    queryFn: () => syncFn({ data: { tenantId: tenantId! } }),
+    enabled: !!tenantId,
+  });
+
+  if (tenantLoading || !tenantId) {
+    return <div className="p-10 text-center text-muted-foreground">Selecione uma empresa no topo…</div>;
+  }
 
   const total = clientes.length;
   const ativos = clientes.filter((c) => c.ativo && !c.bloqueado).length;
@@ -81,8 +84,10 @@ function Index() {
 
   const bloqueadosList = clientes.filter((c) => c.bloqueado).slice(0, 5);
 
-  const ultimoLog = sync.logs[0];
-  const ultimoSucesso = sync.logs.find((l) => l.status === "sucesso");
+  const logs = sync?.logs ?? [];
+  const ultimoSucesso = logs.find((l) => l.status === "sucesso");
+  const syncAtivo = sync?.ativo ?? false;
+  const syncIntervalo = sync?.intervaloHoras ?? 24;
 
   const kpis = [
     { label: "Clientes Ativos", value: `${ativos}/${total}`, sub: `${inativos} inativos`, icon: Building2, accent: "text-primary" },
@@ -93,9 +98,9 @@ function Index() {
     {
       label: "Sync OEM",
       value: ultimoSucesso ? formatRelativo(ultimoSucesso.executadoEm) : "—",
-      sub: sync.ativo ? `a cada ${sync.intervaloHoras}h` : "automação desligada",
+      sub: syncAtivo ? `a cada ${syncIntervalo}h` : "automação desligada",
       icon: CircuitBoard,
-      accent: sync.ativo ? "text-success" : "text-muted-foreground",
+      accent: syncAtivo ? "text-success" : "text-muted-foreground",
     },
   ];
 
@@ -159,11 +164,11 @@ function Index() {
             <p className="text-xs uppercase tracking-wider text-muted-foreground">Últimas sincronizações</p>
             <Link to="/configuracoes" className="text-xs text-primary hover:underline">configurar</Link>
           </div>
-          {sync.logs.length === 0 ? (
+          {logs.length === 0 ? (
             <p className="mt-4 text-sm text-muted-foreground">Nenhuma execução registrada ainda.</p>
           ) : (
             <ul className="mt-3 divide-y divide-border">
-              {sync.logs.slice(0, 5).map((l) => {
+              {logs.slice(0, 5).map((l) => {
                 const Icon =
                   l.status === "sucesso" ? CheckCircle2 :
                   l.status === "erro" ? AlertCircle : Clock;
