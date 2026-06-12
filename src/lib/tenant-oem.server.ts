@@ -157,7 +157,7 @@ export async function obterTokenTenant(
   // Lê estado atual do cache (token + cooldown)
   const { data: cache } = await supabaseAdmin
     .from("oem_token_cache")
-    .select("token, expira_em, cooldown_ate")
+    .select("token, expira_em, cooldown_ate, atualizado_em")
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (!forcarNovo) {
@@ -196,10 +196,19 @@ export async function obterTokenTenant(
     return token;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // Se o /token devolveu 429, registra cooldown de 60s para que cliques
-    // subsequentes não voltem a martelar o provedor.
+    // Se o /token devolveu 429, registra cooldown com escalonamento: começa
+    // em 2 min e dobra a cada 429 consecutivo (máx. 15 min). Assim, se o
+    // bloqueio do provedor for mais longo, paramos de insistir rapidamente.
     if (/HTTP 429/.test(msg)) {
-      const ate = new Date(Date.now() + 60_000).toISOString();
+      let duracao = 120_000;
+      if (cache?.cooldown_ate && cache.atualizado_em) {
+        const anterior =
+          new Date(cache.cooldown_ate).getTime() - new Date(cache.atualizado_em).getTime();
+        if (Number.isFinite(anterior) && anterior > 0) {
+          duracao = Math.min(anterior * 2, 900_000);
+        }
+      }
+      const ate = new Date(Date.now() + duracao).toISOString();
       await supabaseAdmin
         .from("oem_token_cache")
         .upsert(
@@ -296,7 +305,9 @@ export async function testTenantConnection(
 ): Promise<{ ok: true; baseUrl: string } | { ok: false; mensagem: string }> {
   try {
     const creds = await loadTenantCreds(tenantId);
-    await obterTokenTenant(tenantId, creds, true);
+    // Usa o token em cache quando válido — testar a conexão não precisa
+    // (e não deve) forçar um token novo no endpoint rate-limitado /token.
+    await obterTokenTenant(tenantId, creds);
     return { ok: true, baseUrl: creds.baseUrl };
   } catch (e) {
     return { ok: false, mensagem: e instanceof Error ? e.message : String(e) };
