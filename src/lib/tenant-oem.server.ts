@@ -381,8 +381,8 @@ export async function runTenantOemSync(
 
   try {
     const creds = await loadTenantCreds(tenantId);
-    const token = await obterTokenTenant(creds);
-    const tokenHolder = criarTokenHolderTenant(creds, token);
+    const token = await obterTokenTenant(tenantId, creds);
+    const tokenHolder = criarTokenHolderTenant(tenantId, creds, token);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     // ---------- Fase 1: enumerar (codEmpresa, codFilial) via listagem ----------
