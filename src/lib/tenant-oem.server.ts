@@ -4,7 +4,7 @@
 // autentica via OAuth2 (password grant) na API OEM da empresa e
 // grava clientes/logs no Cloud central com tenant_id.
 // ============================================================
-import { mapLicenciamentoToRow } from "@/lib/doctoroem.functions";
+import { mapLicenciamentoToRow, fetchLicenciamentoOem, type TokenHolder } from "@/lib/doctoroem.functions";
 
 type TenantCreds = {
   baseUrl: string;
@@ -139,6 +139,76 @@ export async function obterTokenTenant(creds: TenantCreds): Promise<string> {
   return token;
 }
 
+// Holder mutável: permite que fetchLicenciamentoOem renove o token quando a
+// API responder 401 no meio do loop longo (carga inicial pode levar minutos).
+function criarTokenHolderTenant(creds: TenantCreds, initial: string): TokenHolder {
+  const holder: TokenHolder = {
+    value: initial,
+    clear: () => {
+      holder.value = "";
+    },
+  };
+  let pending: Promise<void> | null = null;
+  holder.refresh = async (reason) => {
+    if (pending) return pending;
+    pending = (async () => {
+      try {
+        if (reason === "401") await new Promise((r) => setTimeout(r, 2000));
+        holder.value = "";
+        holder.value = await obterTokenTenant(creds);
+      } finally {
+        pending = null;
+      }
+    })();
+    return pending;
+  };
+  return holder;
+}
+
+// ---------------------------------------------------------------
+// Normalização anti-zerados: garante que toda linha gravada tenha
+// contadores e módulos preenchidos (sobrescrevendo dados antigos)
+// e que o custo_total NUNCA fique vazio — se a API vier sem valor,
+// soma o total dos módulos ativos como fallback dinâmico.
+// ---------------------------------------------------------------
+function blindarRow(row: Record<string, unknown>): Record<string, unknown> {
+  const modulos = Array.isArray(row.modulos_ativos)
+    ? (row.modulos_ativos as Record<string, unknown>[])
+    : [];
+  // Sempre escreve a lista (mesmo []) para limpar módulos removidos no OEM.
+  row.modulos_ativos = modulos;
+
+  // Zera contadores quando o OEM reduziu/desativou recursos.
+  row.qtd_pdv = typeof row.qtd_pdv === "number" ? row.qtd_pdv : 0;
+  row.qtd_pdv_comandas =
+    typeof row.qtd_pdv_comandas === "number" ? row.qtd_pdv_comandas : Number(row.qtd_pdv ?? 0);
+  row.qtd_comandas = typeof row.qtd_comandas === "number" ? row.qtd_comandas : 0;
+  row.usuarios_adicionais =
+    typeof row.usuarios_adicionais === "number" ? row.usuarios_adicionais : 0;
+
+  // Fallback dinâmico de custo: se a API não trouxe valorTotal (ou veio 0),
+  // soma os totais dos módulos ATIVOS para nunca persistir 0/null indevido.
+  const custoBruto = Number(row.custo_total ?? 0);
+  if (!Number.isFinite(custoBruto) || custoBruto <= 0) {
+    const somaModulos = modulos.reduce((acc, m) => {
+      const ativoRaw = m.ativo ?? m.active;
+      const ativo = typeof ativoRaw === "boolean" ? ativoRaw : true;
+      if (!ativo) return acc;
+      const total =
+        Number(
+          m.total ??
+            m.valorTotal ??
+            m.valor_total ??
+            m.valor ??
+            (Number(m.quantidade ?? 0) * Number(m.valorUnitario ?? m.valor_unitario ?? 0)),
+        ) || 0;
+      return acc + total;
+    }, 0);
+    row.custo_total = Math.round(somaModulos * 100) / 100;
+  }
+  return row;
+}
+
 export async function testTenantConnection(
   tenantId: string,
 ): Promise<{ ok: true; baseUrl: string } | { ok: false; mensagem: string }> {
@@ -233,9 +303,15 @@ export async function runTenantOemSync(
   try {
     const creds = await loadTenantCreds(tenantId);
     const token = await obterTokenTenant(creds);
+    const tokenHolder = criarTokenHolderTenant(creds, token);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    const rows: Record<string, unknown>[] = [];
+    // ---------- Fase 1: enumerar (codEmpresa, codFilial) via listagem ----------
+    const candidatos: Array<{
+      codEmpresa: number;
+      codFilial: number;
+      resumo: Record<string, unknown>;
+    }> = [];
     const seen = new Set<string>();
     let pagina = 1;
     let totalLidos = 0;
@@ -259,21 +335,27 @@ export async function runTenantOemSync(
           const key = `${codEmpresa}:${codFilial}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          const payload = buildResumoFallback(grupo, filial);
-          const row = mapLicenciamentoToRow(payload, codEmpresa, codFilial);
-          if (row) {
-            rows.push({ ...row, tenant_id: tenantId });
-          }
+          candidatos.push({
+            codEmpresa,
+            codFilial,
+            resumo: buildResumoFallback(grupo, filial),
+          });
         }
       }
 
       pagina += 1;
     }
 
-    // Upsert em lotes de 100 para não estourar payload.
+    // ---------- Fase 2: buscar detalhe COMPLETO de cada filial ----------
+    // /v1/licenciamento/{emp}/{fil} traz módulos, valorTotal e pdvComandas —
+    // a listagem sozinha não traz esses campos (por isso clientes vinham
+    // zerados). Processamos em chunks de 25 com pausa entre eles.
+    const rows: Record<string, unknown>[] = [];
     let inseridos = 0;
     let atualizados = 0;
     let falhas = 0;
+    const CHUNK = 25;
+    const PAUSA_MS = 400;
 
     // pré-carrega chaves existentes para distinguir insert/update
     const { data: existentes } = await supabaseAdmin
@@ -284,21 +366,56 @@ export async function runTenantOemSync(
       (existentes ?? []).map((r) => String((r as { filial_codigo: string | null }).filial_codigo)),
     );
 
-    for (let i = 0; i < rows.length; i += 100) {
-      const lote = rows.slice(i, i + 100);
-      const { error } = await supabaseAdmin
-        .from("clientes_oem")
-        // @ts-expect-error — payload dinâmico, validado em runtime
-        .upsert(lote, { onConflict: "tenant_id,filial_codigo" });
-      if (error) {
-        console.error("[tenant-oem] falha no upsert do lote:", error.message);
-        falhas += lote.length;
-        continue;
+    for (let i = 0; i < candidatos.length; i += CHUNK) {
+      const lote = candidatos.slice(i, i + CHUNK);
+
+      // Busca o detalhe em paralelo dentro do chunk (25 conexões simultâneas
+      // é confortável para a API OEM). Fallback para o resumo se 404/erro.
+      const detalhados: Array<Record<string, unknown> | null> = await Promise.all(
+        lote.map(async (c) => {
+          try {
+            const detalhe = await fetchLicenciamentoOem(tokenHolder, c.codEmpresa, c.codFilial);
+            const payload = detalhe ?? c.resumo;
+            const row = mapLicenciamentoToRow(payload, c.codEmpresa, c.codFilial);
+            if (!row) return null;
+            return { ...blindarRow(row), tenant_id: tenantId } as Record<string, unknown>;
+          } catch (err) {
+            console.error(
+              `[tenant-oem] falha ao buscar detalhe ${c.codEmpresa}/${c.codFilial}:`,
+              err instanceof Error ? err.message : err,
+            );
+            return null;
+          }
+        }),
+      );
+
+      const validos: Record<string, unknown>[] = detalhados.filter(
+        (r): r is Record<string, unknown> => r !== null,
+      );
+      falhas += lote.length - validos.length;
+      rows.push(...validos);
+
+      // Upsert imediato deste chunk — falhas isoladas não derrubam o lote inteiro.
+      if (validos.length) {
+        const { error } = await supabaseAdmin
+          .from("clientes_oem")
+          // @ts-expect-error — payload dinâmico, validado em runtime
+          .upsert(validos, { onConflict: "tenant_id,filial_codigo" });
+        if (error) {
+          console.error("[tenant-oem] falha no upsert do chunk:", error.message);
+          falhas += validos.length;
+        } else {
+          for (const r of validos) {
+            const fk = String(r.filial_codigo ?? "");
+            if (existentesSet.has(fk)) atualizados += 1;
+            else inseridos += 1;
+          }
+        }
       }
-      for (const r of lote) {
-        const fk = String(r.filial_codigo ?? "");
-        if (existentesSet.has(fk)) atualizados += 1;
-        else inseridos += 1;
+
+      // Pausa entre chunks para não saturar a API da TabletCloud.
+      if (i + CHUNK < candidatos.length) {
+        await new Promise((r) => setTimeout(r, PAUSA_MS));
       }
     }
 
