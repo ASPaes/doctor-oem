@@ -26,6 +26,8 @@ function segredoValido(recebido: string | null): boolean {
   }
   if (process.env.OEM_SYNC_CRON_SECRET) candidatos.push(process.env.OEM_SYNC_CRON_SECRET);
   if (process.env.OEM_CLIENT_SECRET) candidatos.push(process.env.OEM_CLIENT_SECRET);
+  // Aceita também a publishable key (anon) — padrão usado pelo pg_cron via header apikey.
+  if (process.env.SUPABASE_PUBLISHABLE_KEY) candidatos.push(process.env.SUPABASE_PUBLISHABLE_KEY);
 
   const ok = candidatos.some((esperado) => comparaSegura(recebido, esperado));
   if (!ok) {
@@ -38,7 +40,9 @@ export const Route = createFileRoute("/api/public/oem-sync")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        if (!segredoValido(request.headers.get("x-cron-secret"))) {
+        const headerSegredo =
+          request.headers.get("x-cron-secret") ?? request.headers.get("apikey");
+        if (!segredoValido(headerSegredo)) {
           return new Response("Unauthorized", { status: 401 });
         }
 
