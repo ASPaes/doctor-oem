@@ -743,9 +743,13 @@ export function mapLicenciamentoToRow(
     filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.PdvComandas ?? lic.qtdPdvComandas ?? lic.QtdPdvComandas,
   );
 
+  // IMPORTANTE: empresa_codigo = codGrupo (da LISTAGEM) e filial_codigo = codFilial
+  // (da LISTAGEM). O detalhe `/v1/licenciamento` devolve outros códigos internos
+  // (codEmpresa/codFilial diferentes), que NÃO são os códigos que o usuário vê
+  // no OEM. Sempre preservamos os códigos da listagem (recebidos por parâmetro).
   const row: Record<string, unknown> = {
-    empresa_codigo: String(num(lic.codEmpresa ?? lic.codeEmpresa ?? lic.CodEmpresa) ?? codEmpresa),
-    filial_codigo: String(num(lic.codFilial ?? lic.CodFilial ?? filialObj?.codigo) ?? codFilial),
+    empresa_codigo: String(codEmpresa),
+    filial_codigo: String(codFilial),
     cnpj_cpf: cpfCnpj ?? `${codEmpresa}/${codFilial}`,
     nome_fantasia: nomeLoja ?? `Empresa ${codEmpresa}/${codFilial}`,
     bloqueado,
