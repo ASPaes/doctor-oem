@@ -4,7 +4,13 @@
 // autentica via OAuth2 (password grant) na API OEM da empresa e
 // grava clientes/logs no Cloud central com tenant_id.
 // ============================================================
-import { mapLicenciamentoToRow, fetchLicenciamentoOem, type TokenHolder } from "@/lib/doctoroem.functions";
+import {
+  mapLicenciamentoToRow,
+  fetchLicenciamentoOem,
+  fetchProdutosOem,
+  fetchModulosOem,
+  type TokenHolder,
+} from "@/lib/doctoroem.functions";
 
 type TenantCreds = {
   baseUrl: string;
@@ -424,6 +430,15 @@ export async function runTenantOemSync(
     const tokenHolder = criarTokenHolderTenant(tenantId, creds, token);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
+    // Catálogo de produtos do OEM (nome → codigo). Usado depois para chamar o
+    // endpoint OFICIAL /minhaslicencas/modulos/{codproduto}/{grupo}/{loja},
+    // que devolve cada módulo com valorUnitario/valorTotal exatos.
+    const produtos = await fetchProdutosOem(tokenHolder, creds.baseUrl);
+    const produtoCodPorNome = new Map<string, string>();
+    for (const p of produtos) {
+      produtoCodPorNome.set(p.nome.trim().toLowerCase(), p.codigo);
+    }
+
     // ---------- Fase 1: enumerar (codEmpresa, codFilial) via listagem ----------
     const candidatos: Array<{
       codEmpresa: number;
@@ -499,7 +514,42 @@ export async function runTenantOemSync(
         lote.map(async (c) => {
           try {
             const detalhe = await fetchLicenciamentoOem(tokenHolder, c.codEmpresa, c.codFilial);
-            const payload = detalhe ?? c.resumo;
+            const payload: Record<string, unknown> = { ...(detalhe ?? c.resumo) };
+
+            // Fonte autoritativa de módulos + valor: endpoint /minhaslicencas/modulos.
+            // Resolve o codproduto pelo nome do produto (vindo da listagem).
+            const nomeProduto =
+              (typeof payload.nomeProduto === "string" && payload.nomeProduto) ||
+              (typeof payload.nomeproduto === "string" && payload.nomeproduto) ||
+              (typeof c.resumo.produto === "string" && c.resumo.produto) ||
+              "";
+            const codProduto = nomeProduto
+              ? produtoCodPorNome.get(nomeProduto.trim().toLowerCase())
+              : undefined;
+            if (codProduto) {
+              const modulosResp = await fetchModulosOem(
+                tokenHolder,
+                creds.baseUrl,
+                codProduto,
+                c.codEmpresa,
+                c.codFilial,
+              );
+              if (modulosResp && Array.isArray(modulosResp.modulos)) {
+                // Sobrescreve módulos e valorTotal com os dados oficiais (sem
+                // sintetizar PDV/Gestão). Demais campos do detalhe ficam.
+                payload.modulos = modulosResp.modulos;
+                if (typeof modulosResp.valorTotal === "number") {
+                  payload.valorTotal = modulosResp.valorTotal;
+                }
+                if (typeof modulosResp.pdvComandas === "number") {
+                  payload.pdvComandas = modulosResp.pdvComandas;
+                }
+                if (typeof modulosResp.usuariosAdicionais === "number") {
+                  payload.usuariosAdicionais = modulosResp.usuariosAdicionais;
+                }
+              }
+            }
+
             const row = mapLicenciamentoToRow(payload, c.codEmpresa, c.codFilial);
             if (!row) return null;
             // Sobrescreve com fonte autoritativa da LISTAGEM:

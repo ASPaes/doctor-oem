@@ -638,45 +638,18 @@ function extrairModulosECusto(
   lic: Record<string, unknown>,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
   const filialObj = getFilialObj(lic);
-  const valorTotalFilial = toFiniteNumber(filialObj?.valorTotal ?? lic.valorTotal);
-  const pdvComandas =
-    toFiniteNumber(filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.qtdPdvComandas) ?? 0;
+  const valorTotalFilial =
+    toFiniteNumber(filialObj?.valorTotal ?? lic.valorTotal ?? lic.ValorTotal);
 
+  // Fonte autoritativa: lista `modulos[]` devolvida pelo endpoint OEM
+  // /v1/licenciamento/minhaslicencas/modulos/{codproduto}/{codgrupo}/{codloja}
+  // — cada item já vem com nome, quantidade, valorUnitario e valorTotal exatos.
+  // NÃO sintetizamos mais "Licença PDV" nem "Gestao": só repassamos o que a API
+  // entregou. O total custo_total reflete o `valorTotal` da loja (autoritativo).
   const rawModulos = getRawModulosFromLicenciamento(lic) ?? [];
-  const modulosApi = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
+  const modulos = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
 
-  const nomeUpper = (m: Record<string, unknown>) => getModuloNome(m, "").toUpperCase();
-  const temPdv = modulosApi.some((m) => /PDV|COMANDA/.test(nomeUpper(m)));
-  const temGestao = modulosApi.some((m) => /GEST/.test(nomeUpper(m)));
-
-  const extras: Record<string, unknown>[] = [];
-
-  // "Licença PDV": a API não traz na lista de módulos — vem como filial.pdvComandas.
-  if (!temPdv && pdvComandas > 0) {
-    const unitPdv =
-      toFiniteNumber(lic.valorPdv ?? filialObj?.valorPdv ?? lic.valorUnitarioPdv) ??
-      VALOR_UNITARIO_PDV_PADRAO;
-    extras.push(
-      makeModuloSintetico("licenca-pdv", "Licença PDV", pdvComandas, unitPdv, round2(pdvComandas * unitPdv)),
-    );
-  }
-
-  // "Gestao" (licença base do produto): o restante do valorTotal da filial
-  // após descontar PDVs e demais módulos (ex.: 62.90 − 30.00 − 3.00 = 29.90).
-  if (!temGestao && valorTotalFilial !== undefined) {
-    const somaParcial = round2(sumModuloTotals(modulosApi) + sumModuloTotals(extras));
-    const restante = round2(valorTotalFilial - somaParcial);
-    if (restante > 0) {
-      const nomeProduto =
-        typeof lic.nomeProduto === "string" && lic.nomeProduto.trim() !== ""
-          ? lic.nomeProduto
-          : "Gestao";
-      extras.unshift(makeModuloSintetico("gestao", nomeProduto, 1, restante, restante));
-    }
-  }
-
-  const modulos = [...extras, ...modulosApi];
-  if (!modulos.length) return {};
+  if (!modulos.length && valorTotalFilial === undefined) return {};
 
   const custo = valorTotalFilial ?? sumModuloTotals(modulos);
   return { modulos, custo: round2(custo) };
@@ -900,6 +873,87 @@ export async function fetchLicenciamentoOem(
   const raw = (await licResp.json().catch(() => null)) as Record<string, unknown> | null;
   if (!raw || typeof raw !== "object") return null;
   return unwrapLicenciamentoPayload(raw);
+}
+
+/**
+ * GET /v1/licenciamento/minhaslicencas/produtos
+ * Devolve a lista de produtos licenciados para o OEM logado (codigo, nome).
+ * Usado para resolver o codproduto que o endpoint /modulos exige.
+ */
+export async function fetchProdutosOem(
+  accessTokenOrHolder: string | TokenHolder,
+  baseUrl: string,
+): Promise<Array<{ codigo: string; nome: string }>> {
+  const url = `${baseUrl}/v1/licenciamento/minhaslicencas/produtos`;
+  const holder = isTokenHolder(accessTokenOrHolder)
+    ? accessTokenOrHolder
+    : staticHolder(accessTokenOrHolder);
+  const exec = async () =>
+    fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
+    });
+  let resp = await exec();
+  if (resp.status === 401 && holder.refresh) {
+    await holder.refresh("401");
+    resp = await exec();
+  }
+  if (!resp.ok) {
+    console.error("[OEM] falha em /minhaslicencas/produtos:", resp.status);
+    return [];
+  }
+  const json = (await resp.json().catch(() => [])) as unknown;
+  if (!Array.isArray(json)) return [];
+  return json
+    .filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
+    .map((p) => ({
+      codigo: String(p.codigo ?? p.Codigo ?? ""),
+      nome: String(p.nome ?? p.Nome ?? ""),
+    }))
+    .filter((p) => p.codigo && p.nome);
+}
+
+/**
+ * GET /v1/licenciamento/minhaslicencas/modulos/{codproduto}/{codgrupo}/{codloja}
+ * Endpoint OFICIAL com os módulos da loja contendo valorUnitario, valorTotal,
+ * quantidade, ativo etc. — fonte autoritativa para o custo por módulo (não
+ * precisamos mais sintetizar/calcular valores).
+ */
+export async function fetchModulosOem(
+  accessTokenOrHolder: string | TokenHolder,
+  baseUrl: string,
+  codProduto: string | number,
+  codGrupo: number,
+  codFilial: number,
+): Promise<Record<string, unknown> | null> {
+  const url = `${baseUrl}/v1/licenciamento/minhaslicencas/modulos/${encodeURIComponent(
+    String(codProduto),
+  )}/${codGrupo}/${codFilial}`;
+  const holder = isTokenHolder(accessTokenOrHolder)
+    ? accessTokenOrHolder
+    : staticHolder(accessTokenOrHolder);
+  const exec = async () =>
+    fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
+    });
+  let resp = await exec();
+  if (resp.status === 401 && holder.refresh) {
+    await holder.refresh("401");
+    resp = await exec();
+  }
+  if (!resp.ok) {
+    if (resp.status >= 500) {
+      console.error("[OEM] erro em /minhaslicencas/modulos:", {
+        url: redactSensitiveUrl(url),
+        status: resp.status,
+      });
+    }
+    return null;
+  }
+  const raw = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!raw || typeof raw !== "object") return null;
+  return raw;
 }
 
 /**
