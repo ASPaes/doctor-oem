@@ -950,7 +950,7 @@ export async function fetchModulosOem(
   codProduto: string | number,
   codGrupo: number,
   codFilial: number,
-): Promise<Record<string, unknown> | null> {
+): Promise<unknown | null> {
   const url = `${baseUrl}/v1/licenciamento/minhaslicencas/modulos/${encodeURIComponent(
     String(codProduto),
   )}/${codGrupo}/${codFilial}`;
@@ -976,9 +976,34 @@ export async function fetchModulosOem(
     }
     return null;
   }
-  const raw = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!raw || typeof raw !== "object") return null;
+  const raw = (await resp.json().catch(() => null)) as unknown;
+  if (raw === null || raw === undefined) return null;
   return raw;
+}
+
+/**
+ * Normaliza a resposta de /minhaslicencas/modulos/{codproduto}/{codgrupo}/{codloja}
+ * em uma lista de módulos no formato persistido em clientes_oem.modulos_ativos.
+ * Esta é a FONTE AUTORITATIVA dos módulos e valores — inclui Gestão, PDV,
+ * Estoque, Mesa/Ficha e qualquer outro módulo licenciado.
+ */
+export function parseModulosOficiais(raw: unknown): Record<string, unknown>[] {
+  if (raw == null) return [];
+  let lista: unknown[] = [];
+  if (Array.isArray(raw)) {
+    lista = raw;
+  } else if (typeof raw === "object") {
+    const obj = unwrapLicenciamentoPayload(raw as Record<string, unknown>);
+    lista = getRawModulosFromLicenciamento(obj) ?? [];
+  }
+  return lista
+    .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
+    .map((m, i) => mapModuloApiToStorage(m, i));
+}
+
+/** Soma exata dos valorTotal dos módulos retornados pela API oficial. */
+export function somarTotalModulos(modulos: Record<string, unknown>[]): number {
+  return sumModuloTotals(modulos);
 }
 
 /**
