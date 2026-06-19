@@ -154,7 +154,7 @@ function Index() {
             <div>
               <Monitor className="h-4 w-4 mx-auto text-muted-foreground mb-1" />
               <p className="text-xl font-semibold tabular-nums">{totalComandas}</p>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Comandas</p>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Mesa/Ficha</p>
             </div>
           </div>
         </div>
