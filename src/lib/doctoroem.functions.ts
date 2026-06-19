@@ -638,45 +638,18 @@ function extrairModulosECusto(
   lic: Record<string, unknown>,
 ): { modulos?: Record<string, unknown>[]; custo?: number } {
   const filialObj = getFilialObj(lic);
-  const valorTotalFilial = toFiniteNumber(filialObj?.valorTotal ?? lic.valorTotal);
-  const pdvComandas =
-    toFiniteNumber(filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.qtdPdvComandas) ?? 0;
+  const valorTotalFilial =
+    toFiniteNumber(filialObj?.valorTotal ?? lic.valorTotal ?? lic.ValorTotal);
 
+  // Fonte autoritativa: lista `modulos[]` devolvida pelo endpoint OEM
+  // /v1/licenciamento/minhaslicencas/modulos/{codproduto}/{codgrupo}/{codloja}
+  // — cada item já vem com nome, quantidade, valorUnitario e valorTotal exatos.
+  // NÃO sintetizamos mais "Licença PDV" nem "Gestao": só repassamos o que a API
+  // entregou. O total custo_total reflete o `valorTotal` da loja (autoritativo).
   const rawModulos = getRawModulosFromLicenciamento(lic) ?? [];
-  const modulosApi = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
+  const modulos = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
 
-  const nomeUpper = (m: Record<string, unknown>) => getModuloNome(m, "").toUpperCase();
-  const temPdv = modulosApi.some((m) => /PDV|COMANDA/.test(nomeUpper(m)));
-  const temGestao = modulosApi.some((m) => /GEST/.test(nomeUpper(m)));
-
-  const extras: Record<string, unknown>[] = [];
-
-  // "Licença PDV": a API não traz na lista de módulos — vem como filial.pdvComandas.
-  if (!temPdv && pdvComandas > 0) {
-    const unitPdv =
-      toFiniteNumber(lic.valorPdv ?? filialObj?.valorPdv ?? lic.valorUnitarioPdv) ??
-      VALOR_UNITARIO_PDV_PADRAO;
-    extras.push(
-      makeModuloSintetico("licenca-pdv", "Licença PDV", pdvComandas, unitPdv, round2(pdvComandas * unitPdv)),
-    );
-  }
-
-  // "Gestao" (licença base do produto): o restante do valorTotal da filial
-  // após descontar PDVs e demais módulos (ex.: 62.90 − 30.00 − 3.00 = 29.90).
-  if (!temGestao && valorTotalFilial !== undefined) {
-    const somaParcial = round2(sumModuloTotals(modulosApi) + sumModuloTotals(extras));
-    const restante = round2(valorTotalFilial - somaParcial);
-    if (restante > 0) {
-      const nomeProduto =
-        typeof lic.nomeProduto === "string" && lic.nomeProduto.trim() !== ""
-          ? lic.nomeProduto
-          : "Gestao";
-      extras.unshift(makeModuloSintetico("gestao", nomeProduto, 1, restante, restante));
-    }
-  }
-
-  const modulos = [...extras, ...modulosApi];
-  if (!modulos.length) return {};
+  if (!modulos.length && valorTotalFilial === undefined) return {};
 
   const custo = valorTotalFilial ?? sumModuloTotals(modulos);
   return { modulos, custo: round2(custo) };
