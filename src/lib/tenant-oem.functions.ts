@@ -168,11 +168,15 @@ export const runTenantInitialLoad = createServerFn({ method: "POST" })
     });
     if (!isAdmin) throw new Error("Apenas administradores podem disparar a sincronização.");
     const { runTenantOemSync } = await import("@/lib/tenant-oem.server");
-    // Fire-and-forget — a carga pode demorar; o log inicial já fica como "processando".
-    void runTenantOemSync(data.tenantId, data.origem ?? "manual").catch((err) => {
-      console.error("[runTenantInitialLoad] erro em background:", err);
-    });
-    return { ok: true, agendado: true };
+    // IMPORTANTE: NÃO usar fire-and-forget. No runtime de Worker, promises
+    // detached são canceladas após o response — o sync nunca executa.
+    // Aguardamos o resultado completo (o frontend mostra "Sincronizando…").
+    const resultado = await runTenantOemSync(data.tenantId, data.origem ?? "manual");
+    return {
+      ok: resultado.status === "sucesso",
+      agendado: false,
+      ...resultado,
+    };
   });
 
 // ----- Bloquear / Desbloquear licença no OEM (admin do tenant) -----
