@@ -541,13 +541,9 @@ export const forceSyncCliente = createServerFn({ method: "POST" })
 
     const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
 
-    const empresaCodigo =
-      num(lic.codEmpresa ?? lic.codeEmpresa)?.toString() ?? str(lic.codEmpresa ?? lic.codeEmpresa);
-    const filialCodigo =
-      num(lic.codFilial ?? filialObjSync?.codigo)?.toString() ??
-      str(lic.codFilial ?? filialObjSync?.codigo);
-    if (empresaCodigo) update.empresa_codigo = empresaCodigo;
-    if (filialCodigo) update.filial_codigo = filialCodigo;
+    // NÃO sobrescrevemos empresa_codigo/filial_codigo aqui: esses campos guardam
+    // o codGrupo + codFilial vindos da LISTAGEM do OEM (o que o usuário enxerga).
+    // O detalhe devolve códigos internos diferentes — usá-los corromperia a chave.
     const nomeLoja = str(lic.nomeEmpresa ?? lic.nomeLoja ?? lic.nomeFantasia);
     if (nomeLoja) update.nome_fantasia = nomeLoja;
     const razao = str(lic.razaoSocial ?? lic.razao_social ?? lic.nomeEmpresa);
