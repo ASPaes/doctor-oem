@@ -7,8 +7,6 @@
 import {
   mapLicenciamentoToRow,
   fetchLicenciamentoOem,
-  fetchProdutosOem,
-  fetchModulosOem,
   type TokenHolder,
 } from "@/lib/doctoroem.functions";
 
