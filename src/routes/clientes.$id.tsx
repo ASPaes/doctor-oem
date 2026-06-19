@@ -297,7 +297,7 @@ function MetricasCard({ cliente, syncing }: { cliente: Cliente; syncing: boolean
   const items = [
     { label: "Filiais ativas", value: cliente.filiaisAtivas, icon: Building2 },
     { label: "PDVs", value: cliente.qtdPdv, icon: Monitor },
-    { label: "Comandas", value: cliente.qtdComandas, icon: Boxes },
+    { label: "Mesa/Ficha", value: cliente.qtdComandas, icon: Boxes },
     { label: "Usuários adicionais", value: cliente.usuariosAdicionais, icon: Users },
   ];
   return (
