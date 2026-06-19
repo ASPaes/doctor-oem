@@ -7,6 +7,10 @@
 import {
   mapLicenciamentoToRow,
   fetchLicenciamentoOem,
+  fetchProdutosOem,
+  fetchModulosOem,
+  parseModulosOficiais,
+  somarTotalModulos,
   type TokenHolder,
 } from "@/lib/doctoroem.functions";
 
@@ -434,6 +438,7 @@ export async function runTenantOemSync(
       codFilial: number;
       filialAtivo: boolean;
       numeroFiliais: number;
+      produto?: string;
       resumo: Record<string, unknown>;
     }> = [];
     const seen = new Set<string>();
@@ -466,12 +471,26 @@ export async function runTenantOemSync(
             codFilial,
             filialAtivo: filial?.ativo ?? grupo.ativo ?? true,
             numeroFiliais: numFiliais,
+            produto: grupo.produto,
             resumo: buildResumoFallback(grupo, filial),
           });
         }
       }
 
       pagina += 1;
+    }
+
+    // ---------- Resolve catálogo de produtos (codigo<->nome) uma única vez ----------
+    // /minhaslicencas/modulos exige o codproduto. A listagem só traz o nome.
+    const produtosMap = new Map<string, string>();
+    try {
+      const produtos = await fetchProdutosOem(tokenHolder, creds.baseUrl);
+      for (const p of produtos) {
+        if (p.nome && p.codigo) produtosMap.set(p.nome.trim().toUpperCase(), p.codigo);
+      }
+      console.log(`[tenant-oem] produtos OEM mapeados: ${produtosMap.size}`);
+    } catch (e) {
+      console.error("[tenant-oem] falha ao listar produtos OEM:", e);
     }
 
     // ---------- Fase 2: buscar detalhe COMPLETO de cada filial ----------
@@ -507,6 +526,52 @@ export async function runTenantOemSync(
 
             const row = mapLicenciamentoToRow(payload, c.codEmpresa, c.codFilial);
             if (!row) return null;
+
+            // ----- FONTE AUTORITATIVA: /minhaslicencas/modulos -----
+            // Substitui modulos_ativos e custo_total pelos valores exatos
+            // (valorUnitario/valorTotal) retornados pela API por módulo,
+            // incluindo Gestão e PDV — que NÃO vêm em /v1/licenciamento.
+            const nomeProduto = (
+              c.produto ??
+              (typeof row.produto_principal === "string" ? row.produto_principal : "")
+            )
+              .toString()
+              .trim()
+              .toUpperCase();
+            const codProduto = produtosMap.get(nomeProduto);
+            if (codProduto) {
+              try {
+                const rawModulos = await fetchModulosOem(
+                  tokenHolder,
+                  creds.baseUrl,
+                  codProduto,
+                  c.codEmpresa,
+                  c.codFilial,
+                );
+                const modulosOficiais = parseModulosOficiais(rawModulos);
+                if (modulosOficiais.length) {
+                  row.modulos_ativos = modulosOficiais;
+                  row.custo_total = somarTotalModulos(modulosOficiais);
+                  // qtd_pdv preferencialmente do módulo "Licença PDV" oficial
+                  const pdvMod = modulosOficiais.find((m) =>
+                    /PDV|COMANDA/i.test(String(m.nome ?? "")),
+                  );
+                  if (pdvMod) {
+                    const q = Number(pdvMod.quantidade ?? 0);
+                    if (Number.isFinite(q) && q >= 0) {
+                      row.qtd_pdv = q;
+                      row.qtd_pdv_comandas = q;
+                    }
+                  }
+                }
+              } catch (err) {
+                console.error(
+                  `[tenant-oem] falha em /minhaslicencas/modulos ${codProduto}/${c.codEmpresa}/${c.codFilial}:`,
+                  err instanceof Error ? err.message : err,
+                );
+              }
+            }
+
             // Sobrescreve com fonte autoritativa da LISTAGEM:
             // - status operacional vem de filial.ativo (NÃO de bloquearLicenca,
             //   que indica apenas bloqueio comercial/licença).
