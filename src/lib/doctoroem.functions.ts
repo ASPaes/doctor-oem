@@ -641,13 +641,38 @@ function extrairModulosECusto(
   const valorTotalFilial =
     toFiniteNumber(filialObj?.valorTotal ?? lic.valorTotal ?? lic.ValorTotal);
 
-  // Fonte autoritativa: lista `modulos[]` devolvida pelo endpoint OEM
-  // /v1/licenciamento/minhaslicencas/modulos/{codproduto}/{codgrupo}/{codloja}
-  // — cada item já vem com nome, quantidade, valorUnitario e valorTotal exatos.
-  // NÃO sintetizamos mais "Licença PDV" nem "Gestao": só repassamos o que a API
-  // entregou. O total custo_total reflete o `valorTotal` da loja (autoritativo).
+  // Fonte autoritativa: `modulos[]` do endpoint /v1/licenciamento/{emp}/{fil}
+  // — cada item já vem com nome, quantidade e valor exatos.
   const rawModulos = getRawModulosFromLicenciamento(lic) ?? [];
   const modulos = rawModulos.map((modulo, index) => mapModuloApiToStorage(modulo, index));
+
+  // PDV não vem em modulos[]. A API expõe a quantidade em `filial.pdvComandas`
+  // e o custo do PDV é o resíduo de `filial.valorTotal` após descontar os
+  // módulos complementares (Estoque, Mesa/Ficha, etc.) que somam à mesma fatura.
+  // Isso NÃO é estimativa: são todos campos retornados pela API; o valor
+  // unitário é apenas a divisão exata do total residual pela quantidade.
+  const pdvQtd = toFiniteNumber(
+    filialObj?.pdvComandas ?? lic.pdvComandas ?? lic.PdvComandas,
+  ) ?? 0;
+  if (pdvQtd > 0 && valorTotalFilial !== undefined) {
+    const somaOutros = sumModuloTotals(modulos);
+    const totalPdv = Math.max(0, round2(valorTotalFilial - somaOutros));
+    const unitarioPdv = pdvQtd > 0 ? round2(totalPdv / pdvQtd) : 0;
+    modulos.unshift(
+      mapModuloApiToStorage(
+        {
+          codigo: "PDV",
+          nome: "Licença PDV",
+          quantidade: pdvQtd,
+          valorUnitario: unitarioPdv,
+          valorTotal: totalPdv,
+          valor: totalPdv,
+          ativo: true,
+        },
+        0,
+      ),
+    );
+  }
 
   if (!modulos.length && valorTotalFilial === undefined) return {};
 
