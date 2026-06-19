@@ -876,6 +876,87 @@ export async function fetchLicenciamentoOem(
 }
 
 /**
+ * GET /v1/licenciamento/minhaslicencas/produtos
+ * Devolve a lista de produtos licenciados para o OEM logado (codigo, nome).
+ * Usado para resolver o codproduto que o endpoint /modulos exige.
+ */
+export async function fetchProdutosOem(
+  accessTokenOrHolder: string | TokenHolder,
+  baseUrl: string,
+): Promise<Array<{ codigo: string; nome: string }>> {
+  const url = `${baseUrl}/v1/licenciamento/minhaslicencas/produtos`;
+  const holder = isTokenHolder(accessTokenOrHolder)
+    ? accessTokenOrHolder
+    : staticHolder(accessTokenOrHolder);
+  const exec = async () =>
+    fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
+    });
+  let resp = await exec();
+  if (resp.status === 401 && holder.refresh) {
+    await holder.refresh("401");
+    resp = await exec();
+  }
+  if (!resp.ok) {
+    console.error("[OEM] falha em /minhaslicencas/produtos:", resp.status);
+    return [];
+  }
+  const json = (await resp.json().catch(() => [])) as unknown;
+  if (!Array.isArray(json)) return [];
+  return json
+    .filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
+    .map((p) => ({
+      codigo: String(p.codigo ?? p.Codigo ?? ""),
+      nome: String(p.nome ?? p.Nome ?? ""),
+    }))
+    .filter((p) => p.codigo && p.nome);
+}
+
+/**
+ * GET /v1/licenciamento/minhaslicencas/modulos/{codproduto}/{codgrupo}/{codloja}
+ * Endpoint OFICIAL com os módulos da loja contendo valorUnitario, valorTotal,
+ * quantidade, ativo etc. — fonte autoritativa para o custo por módulo (não
+ * precisamos mais sintetizar/calcular valores).
+ */
+export async function fetchModulosOem(
+  accessTokenOrHolder: string | TokenHolder,
+  baseUrl: string,
+  codProduto: string | number,
+  codGrupo: number,
+  codFilial: number,
+): Promise<Record<string, unknown> | null> {
+  const url = `${baseUrl}/v1/licenciamento/minhaslicencas/modulos/${encodeURIComponent(
+    String(codProduto),
+  )}/${codGrupo}/${codFilial}`;
+  const holder = isTokenHolder(accessTokenOrHolder)
+    ? accessTokenOrHolder
+    : staticHolder(accessTokenOrHolder);
+  const exec = async () =>
+    fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
+    });
+  let resp = await exec();
+  if (resp.status === 401 && holder.refresh) {
+    await holder.refresh("401");
+    resp = await exec();
+  }
+  if (!resp.ok) {
+    if (resp.status >= 500) {
+      console.error("[OEM] erro em /minhaslicencas/modulos:", {
+        url: redactSensitiveUrl(url),
+        status: resp.status,
+      });
+    }
+    return null;
+  }
+  const raw = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!raw || typeof raw !== "object") return null;
+  return raw;
+}
+
+/**
  * Container mutável de token compartilhado entre chamadas paralelas.
  * Permite renovar o access_token uma única vez quando a API responde 401.
  */
