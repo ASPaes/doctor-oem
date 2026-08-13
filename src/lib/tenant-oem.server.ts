@@ -14,7 +14,7 @@ import {
   type TokenHolder,
 } from "@/lib/doctoroem.functions";
 
-type TenantCreds = {
+export type TenantCreds = {
   baseUrl: string;
   username: string;
   password: string;
@@ -33,7 +33,7 @@ type TabletCloudFilialResumo = {
   email?: string;
 };
 
-type TabletCloudGrupoResumo = {
+export type TabletCloudGrupoResumo = {
   codGrupo?: number;
   ativo?: boolean;
   nomeGrupo?: string;
@@ -45,7 +45,7 @@ type TabletCloudGrupoResumo = {
   filiais?: TabletCloudFilialResumo[];
 };
 
-type ListagemResponse = {
+export type ListagemResponse = {
   totalRegistros?: number;
   totalGruposNaPagina?: number;
   pagina?: number;
@@ -62,7 +62,7 @@ export type TenantSyncResult = {
   mensagem: string;
 };
 
-function toNumber(v: unknown): number | null {
+export function toNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
     const n = parseInt(v.replace(/\D/g, ""), 10);
@@ -71,7 +71,7 @@ function toNumber(v: unknown): number | null {
   return null;
 }
 
-function buildResumoFallback(
+export function buildResumoFallback(
   resumo: TabletCloudGrupoResumo,
   filial?: TabletCloudFilialResumo,
 ): Record<string, unknown> {
@@ -88,7 +88,7 @@ function buildResumoFallback(
   };
 }
 
-async function loadTenantCreds(tenantId: string): Promise<TenantCreds> {
+export async function loadTenantCreds(tenantId: string): Promise<TenantCreds> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data, error } = await supabaseAdmin
     .from("tenant_oem_settings")
@@ -236,7 +236,7 @@ export async function obterTokenTenant(
 
 // Holder mutável: permite que fetchLicenciamentoOem renove o token quando a
 // API responder 401 no meio do loop longo (carga inicial pode levar minutos).
-function criarTokenHolderTenant(
+export function criarTokenHolderTenant(
   tenantId: string,
   creds: TenantCreds,
   initial: string,
@@ -270,7 +270,7 @@ function criarTokenHolderTenant(
 // e que o custo_total NUNCA fique vazio — se a API vier sem valor,
 // soma o total dos módulos ativos como fallback dinâmico.
 // ---------------------------------------------------------------
-function blindarRow(row: Record<string, unknown>): Record<string, unknown> {
+export function blindarRow(row: Record<string, unknown>): Record<string, unknown> {
   const modulos = Array.isArray(row.modulos_ativos)
     ? (row.modulos_ativos as Record<string, unknown>[])
     : [];
@@ -347,16 +347,28 @@ async function fetchOemAutenticado(
   return resp;
 }
 
-async function fetchListagemPagina(
+export async function fetchListagemPagina(
   creds: TenantCreds,
-  token: string,
+  tokenOuHolder: string | TokenHolder,
   pagina: number,
 ): Promise<ListagemResponse> {
   const url = `${creds.baseUrl}/v1/licenciamento?pagina=${pagina}`;
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-  });
+  const holder: TokenHolder =
+    typeof tokenOuHolder === "string"
+      ? { value: tokenOuHolder, clear: () => undefined }
+      : tokenOuHolder;
+  const exec = () =>
+    fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${holder.value}`, Accept: "application/json" },
+    });
+  let resp = await exec();
+  // BUG CORRIGIDO: a paginação usava o token inicial. Numa listagem longa o
+  // token vencia no meio e o 401 derrubava a carga inteira. Agora renova.
+  if (resp.status === 401 && holder.refresh) {
+    await holder.refresh("401");
+    resp = await exec();
+  }
   if (!resp.ok) {
     const preview = await resp.text().catch(() => "");
     throw new Error(`Listagem OEM HTTP ${resp.status}: ${preview.slice(0, 180)}`);
@@ -368,7 +380,7 @@ async function fetchListagemPagina(
   return json;
 }
 
-async function inserirLog(
+export async function inserirLog(
   tenantId: string,
   origem: "manual" | "cron" | "carga-inicial",
   status: "processando" | "sucesso" | "erro",
@@ -396,7 +408,7 @@ async function inserirLog(
   return (data?.id as string) ?? null;
 }
 
-async function finalizarLog(logId: string | null, result: TenantSyncResult): Promise<void> {
+export async function finalizarLog(logId: string | null, result: TenantSyncResult): Promise<void> {
   if (!logId) return;
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { error } = await supabaseAdmin

@@ -171,11 +171,9 @@ export const upsertTenantOemSettings = createServerFn({ method: "POST" })
     z
       .object({
         tenant_id: z.string().uuid(),
-        doctoroem_url: z.string().url().nullable().optional(),
-        doctoroem_publishable_secret_name: z.string().max(120).nullable().optional(),
-        doctoroem_service_secret_name: z.string().max(120).nullable().optional(),
-        tabletcloud_url: z.string().url().nullable().optional(),
-        tabletcloud_token_secret_name: z.string().max(120).nullable().optional(),
+        // Os campos doctoroem_url / tabletcloud_* saíram: eram do desenho
+        // abandonado de "um Supabase externo por empresa". Hoje tudo vive no
+        // banco central e a integração é direta com a API OEM.
         oem_api_base_url: z.string().url().nullable().optional(),
         oem_api_username: z.string().max(200).nullable().optional(),
         oem_api_password: z.string().max(200).nullable().optional(),

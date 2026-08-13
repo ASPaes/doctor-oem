@@ -241,7 +241,7 @@ function getRawModulosFromLicenciamento(
   return undefined;
 }
 
-function unwrapLicenciamentoPayload(raw: Record<string, unknown>): Record<string, unknown> {
+export function unwrapLicenciamentoPayload(raw: Record<string, unknown>): Record<string, unknown> {
   const response = raw.response && typeof raw.response === "object" && !Array.isArray(raw.response)
     ? (raw.response as Record<string, unknown>)
     : undefined;

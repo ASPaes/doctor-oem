@@ -167,16 +167,47 @@ export const runTenantInitialLoad = createServerFn({ method: "POST" })
       _tenant_id: data.tenantId,
     });
     if (!isAdmin) throw new Error("Apenas administradores podem disparar a sincronização.");
-    const { runTenantOemSync } = await import("@/lib/tenant-oem.server");
-    // IMPORTANTE: NÃO usar fire-and-forget. No runtime de Worker, promises
-    // detached são canceladas após o response — o sync nunca executa.
-    // Aguardamos o resultado completo (o frontend mostra "Sincronizando…").
-    const resultado = await runTenantOemSync(data.tenantId, data.origem ?? "manual");
-    return {
-      ok: resultado.status === "sucesso",
-      agendado: false,
-      ...resultado,
-    };
+    // UM passo da carga. A carga inteira (~4.500 chamadas ao OEM) não cabe em
+    // uma requisição — quem chama repete até `concluido`. Ver oem-carga.server.
+    const { avancarCargaOem } = await import("@/lib/oem-carga.server");
+    return avancarCargaOem(data.tenantId, data.origem ?? "manual");
+  });
+
+// ----- Avança a carga em lotes: chame em loop até concluido === true -----
+export const avancarCargaTenant = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        tenantId: z.string().uuid(),
+        origem: z.enum(["manual", "carga-inicial"]).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: isAdmin } = await supabase.rpc("is_tenant_admin", {
+      _user_id: userId,
+      _tenant_id: data.tenantId,
+    });
+    if (!isAdmin) throw new Error("Apenas administradores podem disparar a sincronização.");
+    const { avancarCargaOem } = await import("@/lib/oem-carga.server");
+    return avancarCargaOem(data.tenantId, data.origem ?? "manual");
+  });
+
+// ----- Cancela a carga em andamento (destrava o "um run ativo por empresa") -----
+export const cancelarCargaTenant = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ tenantId: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: isAdmin } = await supabase.rpc("is_tenant_admin", {
+      _user_id: userId,
+      _tenant_id: data.tenantId,
+    });
+    if (!isAdmin) throw new Error("Apenas administradores podem cancelar a sincronização.");
+    const { cancelarCargaOem } = await import("@/lib/oem-carga.server");
+    return cancelarCargaOem(data.tenantId);
   });
 
 // ----- Bloquear / Desbloquear licença no OEM (admin do tenant) -----
@@ -214,13 +245,10 @@ export const alterarStatusLicencaOem = createServerFn({ method: "POST" })
     if (!Number.isFinite(codEmpresa) || !Number.isFinite(codFilial)) {
       throw new Error("Cliente sem codEmpresa/codFilial válidos para chamar o OEM.");
     }
-    const { alterarStatusLicencaTenant } = await import("@/lib/tenant-oem.server");
-    const result = await alterarStatusLicencaTenant(
-      data.tenantId,
-      codEmpresa,
-      codFilial,
-      data.bloquear,
-    );
+    const { atualizarFilialOem } = await import("@/lib/oem-escrita.server");
+    const result = await atualizarFilialOem(data.tenantId, codEmpresa, codFilial, {
+      bloquear: data.bloquear,
+    });
     if (!result.ok) throw new Error(result.mensagem);
     return { ok: true as const, bloqueado: data.bloquear };
   });
@@ -259,13 +287,11 @@ export const alterarStatusAtivacaoOem = createServerFn({ method: "POST" })
     if (!Number.isFinite(codEmpresa) || !Number.isFinite(codFilial)) {
       throw new Error("Cliente sem codEmpresa/codFilial válidos para chamar o OEM.");
     }
-    const { alterarStatusAtivacaoTenant } = await import("@/lib/tenant-oem.server");
-    const result = await alterarStatusAtivacaoTenant(
-      data.tenantId,
-      codEmpresa,
-      codFilial,
-      data.ativar,
-    );
+    const { atualizarFilialOem } = await import("@/lib/oem-escrita.server");
+    // A flag do OEM é "desativarLicenca" — o inverso de "ativar" da tela.
+    const result = await atualizarFilialOem(data.tenantId, codEmpresa, codFilial, {
+      desativar: !data.ativar,
+    });
     if (!result.ok) throw new Error(result.mensagem);
     return { ok: true as const, ativo: data.ativar };
   });

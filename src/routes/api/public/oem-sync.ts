@@ -77,7 +77,7 @@ export const Route = createFileRoute("/api/public/oem-sync")({
         const inicio = Date.now();
         try {
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-          const { runTenantOemSync } = await import("@/lib/tenant-oem.server");
+          const { avancarCargaOem } = await import("@/lib/oem-carga.server");
 
           // 1) Tenants ativos + 2) com sincronização habilitada (default = true).
           const { data: tenants, error: tenantsErr } = await supabaseAdmin
@@ -119,12 +119,20 @@ export const Route = createFileRoute("/api/public/oem-sync")({
             (t) => !desativados.has(String(t.id)) && comCredenciais.has(String(t.id)),
           );
 
-          // 4) Loop sequencial — uma empresa por vez para não saturar a API OEM.
+          // 4) Cada invocação executa alguns PASSOS da carga, não a carga toda.
+          // A carga completa são ~4.500 chamadas ao OEM e não cabe em uma
+          // requisição (Workers: 50 subrequisições no free, 1.000 no pago).
+          // O cron chama de novo e a fila continua de onde parou.
+          const MAX_PASSOS = Number(process.env.OEM_PASSOS_POR_CRON) || 2;
+
           const resultados: Array<{
             tenantId: string;
             tenantNome: string;
             status: string;
+            fase: string;
             total: number;
+            processados: number;
+            restantes: number;
             inseridos: number;
             atualizados: number;
             falhas: number;
@@ -132,30 +140,73 @@ export const Route = createFileRoute("/api/public/oem-sync")({
           }> = [];
 
           for (const t of elegiveis) {
+            const tenantId = String(t.id);
+            const tenantNome = String(t.nome ?? t.slug ?? t.id);
             try {
-              const r = await runTenantOemSync(String(t.id), origem === "cron" ? "cron" : "manual");
+              // Se NÃO há carga em andamento, respeita o intervalo configurado.
+              const { data: runAtivo } = await supabaseAdmin
+                .from("oem_sync_runs")
+                .select("id")
+                .eq("tenant_id", tenantId)
+                .in("fase", ["listando", "detalhando"])
+                .limit(1)
+                .maybeSingle();
+
+              if (!runAtivo && origem === "cron") {
+                const { data: cfg } = await supabaseAdmin
+                  .from("oem_sync_config")
+                  .select("intervalo_horas")
+                  .eq("tenant_id", tenantId)
+                  .maybeSingle();
+                const intervaloH = Number(cfg?.intervalo_horas ?? 24);
+                const { data: ultimo } = await supabaseAdmin
+                  .from("oem_sync_logs")
+                  .select("executado_em")
+                  .eq("tenant_id", tenantId)
+                  .eq("status", "sucesso")
+                  .order("executado_em", { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+                if (ultimo?.executado_em) {
+                  const decorrido = Date.now() - new Date(String(ultimo.executado_em)).getTime();
+                  // Margem de 5 min para tolerar variação do agendador.
+                  if (decorrido < intervaloH * 3_600_000 - 300_000) {
+                    resultados.push({
+                      tenantId, tenantNome, status: "ignorado", fase: "ocioso",
+                      total: 0, processados: 0, restantes: 0,
+                      inseridos: 0, atualizados: 0, falhas: 0,
+                      mensagem: `Última carga há ${(decorrido / 3_600_000).toFixed(1)}h — intervalo de ${intervaloH}h ainda não decorrido.`,
+                    });
+                    continue;
+                  }
+                }
+              }
+
+              let passo = await avancarCargaOem(tenantId, origem === "cron" ? "cron" : "manual");
+              for (let i = 1; i < MAX_PASSOS && !passo.concluido && passo.fase !== "erro"; i++) {
+                passo = await avancarCargaOem(tenantId, origem === "cron" ? "cron" : "manual");
+              }
+
               resultados.push({
-                tenantId: String(t.id),
-                tenantNome: String(t.nome ?? t.slug ?? t.id),
-                status: r.status,
-                total: r.total,
-                inseridos: r.inseridos,
-                atualizados: r.atualizados,
-                falhas: r.falhas,
-                mensagem: r.mensagem,
+                tenantId,
+                tenantNome,
+                status: passo.fase === "erro" ? "erro" : passo.concluido ? "sucesso" : "em-andamento",
+                fase: passo.fase,
+                total: passo.enfileirados,
+                processados: passo.processados,
+                restantes: passo.restantes,
+                inseridos: passo.inseridos,
+                atualizados: passo.atualizados,
+                falhas: passo.falhas,
+                mensagem: passo.mensagem,
               });
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
-              console.error(`[oem-sync] tenant ${t.id} falhou:`, msg);
+              console.error(`[oem-sync] tenant ${tenantId} falhou:`, msg);
               resultados.push({
-                tenantId: String(t.id),
-                tenantNome: String(t.nome ?? t.slug ?? t.id),
-                status: "erro",
-                total: 0,
-                inseridos: 0,
-                atualizados: 0,
-                falhas: 0,
-                mensagem: msg,
+                tenantId, tenantNome, status: "erro", fase: "erro",
+                total: 0, processados: 0, restantes: 0,
+                inseridos: 0, atualizados: 0, falhas: 0, mensagem: msg,
               });
             }
           }

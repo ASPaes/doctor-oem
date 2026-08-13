@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       clientes_oem: {
@@ -20,8 +45,8 @@ export type Database = {
           cnpj_cpf: string
           created_at: string
           custo_total: number | null
-          empresa_codigo: string | null
-          filial_codigo: string | null
+          empresa_codigo: string
+          filial_codigo: string
           grupo_economico: string | null
           id: string
           last_sync: string | null
@@ -31,8 +56,8 @@ export type Database = {
           nome_fantasia: string
           numero_filiais: number | null
           produto_principal: string | null
-          qtd_comandas: number | null
-          qtd_pdv: number | null
+          qtd_comandas: number
+          qtd_pdv: number
           qtd_pdv_comandas: number | null
           razao_social: string | null
           status: string | null
@@ -42,11 +67,11 @@ export type Database = {
         }
         Insert: {
           bloqueado?: boolean | null
-          cnpj_cpf?: string
+          cnpj_cpf: string
           created_at?: string
           custo_total?: number | null
-          empresa_codigo?: string | null
-          filial_codigo?: string | null
+          empresa_codigo: string
+          filial_codigo: string
           grupo_economico?: string | null
           id?: string
           last_sync?: string | null
@@ -56,8 +81,8 @@ export type Database = {
           nome_fantasia: string
           numero_filiais?: number | null
           produto_principal?: string | null
-          qtd_comandas?: number | null
-          qtd_pdv?: number | null
+          qtd_comandas?: number
+          qtd_pdv?: number
           qtd_pdv_comandas?: number | null
           razao_social?: string | null
           status?: string | null
@@ -70,8 +95,8 @@ export type Database = {
           cnpj_cpf?: string
           created_at?: string
           custo_total?: number | null
-          empresa_codigo?: string | null
-          filial_codigo?: string | null
+          empresa_codigo?: string
+          filial_codigo?: string
           grupo_economico?: string | null
           id?: string
           last_sync?: string | null
@@ -81,8 +106,8 @@ export type Database = {
           nome_fantasia?: string
           numero_filiais?: number | null
           produto_principal?: string | null
-          qtd_comandas?: number | null
-          qtd_pdv?: number | null
+          qtd_comandas?: number
+          qtd_pdv?: number
           qtd_pdv_comandas?: number | null
           razao_social?: string | null
           status?: string | null
@@ -92,7 +117,7 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "clientes_oem_tenant_id_fkey"
+            foreignKeyName: "clientes_oem_tenant_fk"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -100,33 +125,131 @@ export type Database = {
           },
         ]
       }
+      developer_gateways: {
+        Row: {
+          api_token_hash: string | null
+          client_id: string | null
+          created_at: string | null
+          id: string
+          webhook_events: string[] | null
+          webhook_url: string | null
+        }
+        Insert: {
+          api_token_hash?: string | null
+          client_id?: string | null
+          created_at?: string | null
+          id?: string
+          webhook_events?: string[] | null
+          webhook_url?: string | null
+        }
+        Update: {
+          api_token_hash?: string | null
+          client_id?: string | null
+          created_at?: string | null
+          id?: string
+          webhook_events?: string[] | null
+          webhook_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "developer_gateways_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clientes_oem"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       oem_sync_config: {
         Row: {
           ativo: boolean
-          created_at: string
+          id: number
           intervalo_horas: number
           tenant_id: string
           updated_at: string
         }
         Insert: {
           ativo?: boolean
-          created_at?: string
+          id?: number
           intervalo_horas?: number
           tenant_id: string
           updated_at?: string
         }
         Update: {
           ativo?: boolean
-          created_at?: string
+          id?: number
           intervalo_horas?: number
           tenant_id?: string
           updated_at?: string
         }
         Relationships: [
           {
-            foreignKeyName: "oem_sync_config_tenant_id_fkey"
+            foreignKeyName: "oem_sync_config_tenant_fk"
             columns: ["tenant_id"]
-            isOneToOne: true
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      oem_sync_fila: {
+        Row: {
+          criado_em: string
+          empresa_codigo: string
+          erro: string | null
+          filial_codigo: string
+          id: number
+          numero_filiais: number | null
+          processado_em: string | null
+          produto: string | null
+          resumo: Json | null
+          run_id: string
+          status: string
+          tenant_id: string
+          tentativas: number
+        }
+        Insert: {
+          criado_em?: string
+          empresa_codigo: string
+          erro?: string | null
+          filial_codigo: string
+          id?: number
+          numero_filiais?: number | null
+          processado_em?: string | null
+          produto?: string | null
+          resumo?: Json | null
+          run_id: string
+          status?: string
+          tenant_id: string
+          tentativas?: number
+        }
+        Update: {
+          criado_em?: string
+          empresa_codigo?: string
+          erro?: string | null
+          filial_codigo?: string
+          id?: number
+          numero_filiais?: number | null
+          processado_em?: string | null
+          produto?: string | null
+          resumo?: Json | null
+          run_id?: string
+          status?: string
+          tenant_id?: string
+          tentativas?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oem_sync_fila_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "oem_sync_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "oem_sync_fila_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
             referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
@@ -152,7 +275,7 @@ export type Database = {
           executado_em?: string
           id?: string
           mensagem?: string | null
-          origem: string
+          origem?: string
           status: string
           tenant_id: string
           total_clientes?: number
@@ -171,7 +294,78 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "oem_sync_logs_tenant_id_fkey"
+            foreignKeyName: "oem_sync_logs_tenant_fk"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      oem_sync_runs: {
+        Row: {
+          atualizado_em: string
+          atualizados: number
+          enfileirados: number
+          erro: string | null
+          falhas: number
+          fase: string
+          finalizado_em: string | null
+          grupos_lidos: number
+          id: string
+          iniciado_em: string
+          inseridos: number
+          log_id: string | null
+          origem: string
+          processados: number
+          produtos: Json | null
+          proxima_pagina: number
+          tenant_id: string
+          total_registros: number | null
+        }
+        Insert: {
+          atualizado_em?: string
+          atualizados?: number
+          enfileirados?: number
+          erro?: string | null
+          falhas?: number
+          fase?: string
+          finalizado_em?: string | null
+          grupos_lidos?: number
+          id?: string
+          iniciado_em?: string
+          inseridos?: number
+          log_id?: string | null
+          origem?: string
+          processados?: number
+          produtos?: Json | null
+          proxima_pagina?: number
+          tenant_id: string
+          total_registros?: number | null
+        }
+        Update: {
+          atualizado_em?: string
+          atualizados?: number
+          enfileirados?: number
+          erro?: string | null
+          falhas?: number
+          fase?: string
+          finalizado_em?: string | null
+          grupos_lidos?: number
+          id?: string
+          iniciado_em?: string
+          inseridos?: number
+          log_id?: string | null
+          origem?: string
+          processados?: number
+          produtos?: Json | null
+          proxima_pagina?: number
+          tenant_id?: string
+          total_registros?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oem_sync_runs_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -211,6 +405,30 @@ export type Database = {
           },
         ]
       }
+      profiles: {
+        Row: {
+          full_name: string | null
+          id: string
+          is_active: boolean
+          role: Database["public"]["Enums"]["user_role"] | null
+          updated_at: string | null
+        }
+        Insert: {
+          full_name?: string | null
+          id: string
+          is_active?: boolean
+          role?: Database["public"]["Enums"]["user_role"] | null
+          updated_at?: string | null
+        }
+        Update: {
+          full_name?: string | null
+          id?: string
+          is_active?: boolean
+          role?: Database["public"]["Enums"]["user_role"] | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       tenant_members: {
         Row: {
           created_at: string
@@ -245,47 +463,32 @@ export type Database = {
       }
       tenant_oem_settings: {
         Row: {
-          doctoroem_publishable_secret_name: string | null
-          doctoroem_service_secret_name: string | null
-          doctoroem_url: string | null
           oem_api_base_url: string | null
           oem_api_method: string | null
           oem_api_password: string | null
           oem_api_username: string | null
           oem_client_id: string | null
           oem_client_secret: string | null
-          tabletcloud_token_secret_name: string | null
-          tabletcloud_url: string | null
           tenant_id: string
           updated_at: string
         }
         Insert: {
-          doctoroem_publishable_secret_name?: string | null
-          doctoroem_service_secret_name?: string | null
-          doctoroem_url?: string | null
           oem_api_base_url?: string | null
           oem_api_method?: string | null
           oem_api_password?: string | null
           oem_api_username?: string | null
           oem_client_id?: string | null
           oem_client_secret?: string | null
-          tabletcloud_token_secret_name?: string | null
-          tabletcloud_url?: string | null
           tenant_id: string
           updated_at?: string
         }
         Update: {
-          doctoroem_publishable_secret_name?: string | null
-          doctoroem_service_secret_name?: string | null
-          doctoroem_url?: string | null
           oem_api_base_url?: string | null
           oem_api_method?: string | null
           oem_api_password?: string | null
           oem_api_username?: string | null
           oem_client_id?: string | null
           oem_client_secret?: string | null
-          tabletcloud_token_secret_name?: string | null
-          tabletcloud_url?: string | null
           tenant_id?: string
           updated_at?: string
         }
@@ -350,6 +553,41 @@ export type Database = {
         }
         Relationships: []
       }
+      webhook_logs: {
+        Row: {
+          created_at: string
+          event_type: string
+          gateway_id: string | null
+          id: string
+          payload: Json
+          response_status: number | null
+        }
+        Insert: {
+          created_at?: string
+          event_type: string
+          gateway_id?: string | null
+          id?: string
+          payload?: Json
+          response_status?: number | null
+        }
+        Update: {
+          created_at?: string
+          event_type?: string
+          gateway_id?: string | null
+          id?: string
+          payload?: Json
+          response_status?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "webhook_logs_gateway_id_fkey"
+            columns: ["gateway_id"]
+            isOneToOne: false
+            referencedRelation: "developer_gateways"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -375,6 +613,7 @@ export type Database = {
     Enums: {
       app_role: "super_admin"
       tenant_role: "admin" | "financeiro" | "suporte"
+      user_role: "admin" | "financeiro" | "suporte"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -500,10 +739,14 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       app_role: ["super_admin"],
       tenant_role: ["admin", "financeiro", "suporte"],
+      user_role: ["admin", "financeiro", "suporte"],
     },
   },
 } as const
