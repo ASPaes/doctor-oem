@@ -1,1 +1,15 @@
-project_id = "tpzflrwtrpzjgsykwynq"
+# Projeto Supabase do DoctorOEM (org DoctorSaaS/ASP).
+# Trocado em 12/08/2026: antes apontava para tpzflrwtrpzjgsykwynq, o projeto
+# gerenciado pelo Lovable Cloud. O banco de verdade é este.
+project_id = "furohpfhukwajhvnnbiw"
+
+# ---------------------------------------------------------------------------
+# Edge Functions
+#
+# SEMPRE declarar verify_jwt aqui, mesmo quando o valor for o padrão. Sem a
+# entrada, o deploy pode trocar a autenticação da função em silêncio.
+# ---------------------------------------------------------------------------
+
+# Um passo da carga do OEM. Chamada pelo pg_cron com a chave service_role.
+[functions.oem-sync-passo]
+verify_jwt = true
