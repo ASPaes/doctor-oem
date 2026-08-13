@@ -1,0 +1,41 @@
+{
+  // Deploy do Nexus Hub no Cloudflare Workers.
+  //
+  // O build do TanStack Start (nitro, preset cloudflare) produz:
+  //   dist/server/server.js  -> o Worker
+  //   dist/client/           -> os arquivos estáticos
+  //
+  // Segredos NÃO ficam aqui. SUPABASE_SERVICE_ROLE_KEY entra por
+  // `wrangler secret put`. As VITE_* são embutidas no build, não em runtime.
+  //
+  // Passo a passo em docs/DEPLOY.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexus-hub-oem",
+  "main": "dist/server/server.js",
+  "compatibility_date": "2026-08-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist/client"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // Públicos/não sensíveis. O que é segredo vai por `wrangler secret put`.
+    "SUPABASE_URL": "https://furohpfhukwajhvnnbiw.supabase.co",
+    "SUPABASE_PROJECT_ID": "furohpfhukwajhvnnbiw",
+    "OEM_API_LEITURA_URL": "https://api.tabletcloud.com.br",
+
+    // Ritmo da carga. No Workers pago são 1.000 subrequisições por requisição;
+    // 60 clientes/passo = ~120 chamadas ao OEM + ~12 ao Supabase. Folga grande.
+    "OEM_CLIENTES_POR_PASSO": "60",
+    "OEM_PAGINAS_POR_PASSO": "10",
+    "OEM_PARALELO": "3",
+    "OEM_PAUSA_MS": "1000",
+    "OEM_PASSOS_POR_CRON": "2",
+
+    // Trava de escrita no OEM. Enquanto for diferente de "true", o sistema
+    // apenas LÊ do OEM — bloquear/desbloquear e ativar/desativar recusam.
+    "OEM_ESCRITA_HABILITADA": "false"
+  }
+}
