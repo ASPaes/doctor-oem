@@ -332,10 +332,34 @@ function MetricasCard({ cliente, syncing }: { cliente: Cliente; syncing: boolean
 }
 
 function ModulosGrid({ cliente, canSeeFinance, syncing }: { cliente: Cliente; canSeeFinance: boolean; syncing: boolean }) {
+  // O OEM devolve também os módulos que a loja NÃO contrata (ativo=false, e o
+  // valor deles não entra no custo). Mostrar tudo poluía a matriz e dava a
+  // impressão de que o cliente paga por eles. Por padrão exibimos só o que
+  // está ativo; os inativos continuam acessíveis num clique, não sumiram.
+  const [verInativos, setVerInativos] = useState(false);
+  const ativos = cliente.modulos.filter((m) => m.ativo);
+  const inativos = cliente.modulos.filter((m) => !m.ativo);
+  const visiveis = verInativos ? [...ativos, ...inativos] : ativos;
+
   return (
     <Card title="Matriz de Módulos" icon={Boxes}>
+      {inativos.length > 0 && (
+        <div className="mb-3 flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">
+            {ativos.length} módulo(s) ativo(s)
+            {!verInativos && ` · ${inativos.length} inativo(s) oculto(s)`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setVerInativos((v) => !v)}
+            className="text-primary hover:underline"
+          >
+            {verInativos ? "ocultar inativos" : "mostrar inativos"}
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {cliente.modulos.map((m) => (
+        {visiveis.map((m) => (
           <div
             key={m.id}
             className={`relative rounded-xl border p-4 transition ${

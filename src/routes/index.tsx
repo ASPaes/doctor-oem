@@ -60,29 +60,47 @@ function Index() {
   }
 
   const total = clientes.length;
-  const ativos = clientes.filter((c) => c.ativo && !c.bloqueado).length;
+  // Regra do negócio (Alexandre, 12/08/2026): cliente DESATIVADO não é
+  // cobrado; licença BLOQUEADA continua sendo. Portanto o custo recorrente
+  // segue o status operacional, e não o bloqueio. Antes esta tela somava a
+  // base inteira — inflava o KPI em mais de 100% com os desativados.
+  const ativosList = clientes.filter((c) => c.ativo);
+  const ativos = ativosList.length;
+  const desativados = total - ativos;
   const bloqueados = clientes.filter((c) => c.bloqueado).length;
-  const inativos = clientes.filter((c) => !c.ativo && !c.bloqueado).length;
-  const receita = clientes.reduce((a, c) => a + c.custoMensal, 0);
-  const totalFiliais = clientes.reduce((a, c) => a + c.filiaisAtivas, 0);
-  const totalPdvs = clientes.reduce((a, c) => a + c.qtdPdv, 0);
-  const totalComandas = clientes.reduce((a, c) => a + c.qtdComandas, 0);
+  const bloqueadosAtivos = ativosList.filter((c) => c.bloqueado).length;
+  const receita = ativosList.reduce((a, c) => a + c.custoMensal, 0);
+  // ATENÇÃO: `filiaisAtivas` é o total de filiais DO GRUPO, repetido em cada
+  // linha do grupo. Somá-lo conta cada grupo várias vezes (dava 5.452 para
+  // 2.561 filiais). Cada linha JÁ É uma filial — o total é a contagem.
+  const totalFiliais = ativos;
+  const totalGrupos = new Set(ativosList.map((c) => c.grupoEconomico || c.codigoEmpresa)).size;
+  const totalPdvs = ativosList.reduce((a, c) => a + c.qtdPdv, 0);
+  const totalComandas = ativosList.reduce((a, c) => a + c.qtdComandas, 0);
 
-  // Top 5 grupos econômicos por custo
+  // Grupos econômicos por custo — só clientes ATIVOS, pela mesma regra do KPI.
+  // `filiais` conta as linhas do grupo (cada linha é uma filial), não soma o
+  // campo numero_filiais, que multiplicaria o grupo por ele mesmo.
   const gruposMap = new Map<string, { custo: number; clientes: number; filiais: number }>();
-  for (const c of clientes) {
+  for (const c of ativosList) {
     const g = c.grupoEconomico || "—";
     const cur = gruposMap.get(g) ?? { custo: 0, clientes: 0, filiais: 0 };
     cur.custo += c.custoMensal;
     cur.clientes += 1;
-    cur.filiais += c.filiaisAtivas;
+    cur.filiais += 1;
     gruposMap.set(g, cur);
   }
-  const topGrupos = Array.from(gruposMap.entries())
-    .sort((a, b) => b[1].custo - a[1].custo)
-    .slice(0, 5);
+  // Antes estas listas eram cortadas em 5 itens e não diziam quanto ficava de
+  // fora — com 946 bloqueados e 2.562 clientes, era quase tudo escondido.
+  // Agora mostram bem mais, com rolagem, e informam o que sobrou.
+  const LISTA_MAX = 50;
+  const gruposOrdenados = Array.from(gruposMap.entries()).sort(
+    (a, b) => b[1].custo - a[1].custo,
+  );
+  const topGrupos = gruposOrdenados.slice(0, LISTA_MAX);
 
-  const bloqueadosList = clientes.filter((c) => c.bloqueado).slice(0, 5);
+  const bloqueadosTodos = clientes.filter((c) => c.bloqueado);
+  const bloqueadosList = bloqueadosTodos.slice(0, LISTA_MAX);
 
   const logs = sync?.logs ?? [];
   const ultimoSucesso = logs.find((l) => l.status === "sucesso");
@@ -90,11 +108,27 @@ function Index() {
   const syncIntervalo = sync?.intervaloHoras ?? 24;
 
   const kpis = [
-    { label: "Clientes Ativos", value: `${ativos}/${total}`, sub: `${inativos} inativos`, icon: Building2, accent: "text-primary" },
+    { label: "Clientes Ativos", value: `${ativos}/${total}`, sub: `${desativados} desativados`, icon: Building2, accent: "text-primary" },
     canSeeFinance
-      ? { label: "Custo Recorrente", value: formatBRL(receita), sub: `${total} contratos`, icon: TrendingUp, accent: "text-accent" }
+      ? {
+          label: "Custo Recorrente",
+          value: formatBRL(receita),
+          sub: `${ativos} ativos · desativados não entram`,
+          icon: TrendingUp,
+          accent: "text-accent",
+        }
       : { label: "Filiais Ativas", value: String(totalFiliais), sub: `${totalPdvs} PDVs`, icon: Store, accent: "text-accent" },
-    { label: "Bloqueios", value: String(bloqueados), sub: bloqueados ? "exige ação" : "tudo ok", icon: ShieldAlert, accent: bloqueados ? "text-destructive" : "text-success" },
+    {
+      label: "Bloqueios",
+      value: String(bloqueados),
+      sub: bloqueadosAtivos
+        ? `${bloqueadosAtivos} em cliente ativo`
+        : bloqueados
+          ? "todos em desativados"
+          : "tudo ok",
+      icon: ShieldAlert,
+      accent: bloqueadosAtivos ? "text-destructive" : "text-muted-foreground",
+    },
     {
       label: "Sync OEM",
       value: ultimoSucesso ? formatRelativo(ultimoSucesso.executadoEm) : "—",
@@ -139,8 +173,18 @@ function Index() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="glass-panel rounded-2xl p-5">
-          <p className="text-xs uppercase tracking-wider text-muted-foreground">Footprint operacional</p>
-          <div className="mt-4 grid grid-cols-3 gap-3 text-center">
+          <p className="text-xs uppercase tracking-wider text-muted-foreground">
+            Footprint operacional
+            <span className="ml-2 normal-case tracking-normal text-muted-foreground/70">
+              clientes ativos
+            </span>
+          </p>
+          <div className="mt-4 grid grid-cols-4 gap-3 text-center">
+            <div>
+              <Building2 className="h-4 w-4 mx-auto text-muted-foreground mb-1" />
+              <p className="text-xl font-semibold tabular-nums">{totalGrupos}</p>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Grupos</p>
+            </div>
             <div>
               <Store className="h-4 w-4 mx-auto text-muted-foreground mb-1" />
               <p className="text-xl font-semibold tabular-nums">{totalFiliais}</p>
@@ -167,8 +211,8 @@ function Index() {
           {logs.length === 0 ? (
             <p className="mt-4 text-sm text-muted-foreground">Nenhuma execução registrada ainda.</p>
           ) : (
-            <ul className="mt-3 divide-y divide-border">
-              {logs.slice(0, 5).map((l) => {
+            <ul className="mt-3 max-h-64 overflow-y-auto divide-y divide-border">
+              {logs.map((l) => {
                 const Icon =
                   l.status === "sucesso" ? CheckCircle2 :
                   l.status === "erro" ? AlertCircle : Clock;
@@ -200,13 +244,18 @@ function Index() {
         {canSeeFinance && (
           <section className="glass-panel rounded-2xl">
             <header className="flex items-center justify-between border-b border-border px-5 py-4">
-              <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Top grupos por custo</h2>
+              <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                Grupos por custo
+                <span className="ml-2 normal-case tracking-normal text-muted-foreground/70">
+                  {topGrupos.length} de {gruposOrdenados.length}
+                </span>
+              </h2>
               <Link to="/clientes" className="text-xs text-primary hover:underline">ver todos</Link>
             </header>
             {topGrupos.length === 0 ? (
               <p className="p-5 text-sm text-muted-foreground">Sem dados.</p>
             ) : (
-              <ul className="divide-y divide-border">
+              <ul className="max-h-[26rem] overflow-y-auto divide-y divide-border">
                 {topGrupos.map(([nome, info]) => (
                   <li key={nome} className="flex items-center gap-3 px-5 py-3">
                     <div className="min-w-0 flex-1">
@@ -225,13 +274,18 @@ function Index() {
           <header className="flex items-center justify-between border-b border-border px-5 py-4">
             <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
               Bloqueios ativos {bloqueados > 0 && <span className="ml-2 text-destructive">({bloqueados})</span>}
+              {bloqueadosTodos.length > bloqueadosList.length && (
+                <span className="ml-2 normal-case tracking-normal text-muted-foreground/70">
+                  mostrando {bloqueadosList.length}
+                </span>
+              )}
             </h2>
             <Link to="/clientes" className="text-xs text-primary hover:underline">ver clientes</Link>
           </header>
           {bloqueadosList.length === 0 ? (
             <p className="p-5 text-sm text-muted-foreground">Nenhum cliente bloqueado no momento. 🎉</p>
           ) : (
-            <ul className="divide-y divide-border">
+            <ul className="max-h-[26rem] overflow-y-auto divide-y divide-border">
               {bloqueadosList.map((c) => (
                 <li key={c.id}>
                   <Link

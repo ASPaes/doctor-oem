@@ -6,7 +6,7 @@ import { Plug, RefreshCw, Save, Clock, KeyRound, PlugZap, Zap } from "lucide-rea
 import {
   getTenantSyncSettings,
   updateTenantSyncSettings,
-  runTenantInitialLoad,
+  avancarCargaTenant,
   testTenantOemConnection,
 } from "@/lib/tenant-oem.functions";
 import { getTenantOemSettings, upsertTenantOemSettings } from "@/lib/tenant.functions";
@@ -72,7 +72,7 @@ function ConfiguracoesPage() {
 
   const getSync = useServerFn(getTenantSyncSettings);
   const updateSync = useServerFn(updateTenantSyncSettings);
-  const runLoad = useServerFn(runTenantInitialLoad);
+  const avancar = useServerFn(avancarCargaTenant);
   const getCreds = useServerFn(getTenantOemSettings);
   const saveCreds = useServerFn(upsertTenantOemSettings);
   const testConn = useServerFn(testTenantOemConnection);
@@ -133,15 +133,41 @@ function ConfiguracoesPage() {
     onError: (err: Error) => toast.error(`Falha ao salvar: ${err.message}`),
   });
 
+  // A carga completa faz ~2 chamadas ao OEM por cliente — não cabe numa
+  // requisição só. Cada passo processa um lote e devolve quanto falta;
+  // aqui chamamos em loop até acabar, mostrando o progresso no botão.
+  const [progresso, setProgresso] = useState<string | null>(null);
   const executarMutation = useMutation({
-    mutationFn: () => runLoad({ data: { tenantId: tenantId!, origem: "manual" } }),
-    onSuccess: () => {
-      toast.success(
-        "Sincronização disparada — rodando em segundo plano. Acompanhe os logs abaixo.",
-      );
-      queryClient.invalidateQueries({ queryKey: ["tenant-sync", tenantId] });
+    mutationFn: async () => {
+      let passo = await avancar({ data: { tenantId: tenantId!, origem: "manual" } });
+      for (let volta = 0; volta < 500; volta++) {
+        if (passo.concluido || passo.fase === "erro") break;
+        setProgresso(
+          passo.fase === "listando"
+            ? `Enumerando… ${passo.enfileirados} na fila`
+            : `${passo.processados}/${passo.enfileirados} · faltam ${passo.restantes}`,
+        );
+        queryClient.invalidateQueries({ queryKey: ["tenant-sync", tenantId] });
+        passo = await avancar({ data: { tenantId: tenantId!, origem: "manual" } });
+      }
+      setProgresso(null);
+      return passo;
     },
-    onError: (err: Error) => toast.error(`Falha na sincronização: ${err.message}`),
+    onSuccess: (passo) => {
+      if (passo.fase === "erro") {
+        toast.error(`Sincronização interrompida: ${passo.mensagem}`);
+      } else if (passo.concluido) {
+        toast.success(`Sincronização concluída — ${passo.mensagem}`);
+      } else {
+        toast.warning(`Sincronização pausada: ${passo.mensagem}`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["tenant-sync", tenantId] });
+      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
+    },
+    onError: (err: Error) => {
+      setProgresso(null);
+      toast.error(`Falha na sincronização: ${err.message}`);
+    },
   });
 
   const salvarCredsMutation = useMutation({
@@ -284,8 +310,10 @@ function ConfiguracoesPage() {
             disabled={executarMutation.isPending}
             className="gap-2"
           >
-            <Zap className="h-4 w-4" />
-            {executarMutation.isPending ? "Disparando…" : "Carga inicial / sincronizar agora"}
+            <Zap className={`h-4 w-4 ${executarMutation.isPending ? "animate-pulse" : ""}`} />
+            {executarMutation.isPending
+              ? (progresso ?? "Sincronizando…")
+              : "Carga inicial / sincronizar agora"}
           </Button>
         </div>
       </div>

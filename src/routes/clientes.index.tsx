@@ -1,8 +1,8 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, useMemo, useDeferredValue, useTransition } from "react";
 import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2, Wrench } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
-import { listTenantClientes, runTenantInitialLoad, alterarStatusLicencaOem, alterarStatusAtivacaoOem, repararClientesZerados } from "@/lib/tenant-oem.functions";
+import { listTenantClientes, avancarCargaTenant, alterarStatusLicencaOem, alterarStatusAtivacaoOem, repararClientesZerados } from "@/lib/tenant-oem.functions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useTenant } from "@/lib/tenant-context";
@@ -50,8 +50,9 @@ function ClientesList() {
   const { activeTenant, loading: tenantLoading } = useTenant();
   const tenantId = activeTenant?.id ?? null;
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const listFn = useServerFn(listTenantClientes);
-  const runLoad = useServerFn(runTenantInitialLoad);
+  const avancar = useServerFn(avancarCargaTenant);
   const alterarLicFn = useServerFn(alterarStatusLicencaOem);
   const alterarAtvFn = useServerFn(alterarStatusAtivacaoOem);
   const repararFn = useServerFn(repararClientesZerados);
@@ -60,10 +61,29 @@ function ClientesList() {
     queryFn: () => listFn({ data: { tenantId: tenantId! } }),
     enabled: !!tenantId,
   });
+  // Carga em lotes: cada passo processa ~100 clientes e devolve quanto falta.
+  // Repetimos até acabar — a carga inteira não cabe numa requisição só.
   const syncMutation = useMutation({
-    mutationFn: () => runLoad({ data: { tenantId: tenantId!, origem: "manual" } }),
-    onSuccess: () => {
-      toast.success("Sincronização disparada — rodando em segundo plano. Acompanhe em Configurações.");
+    mutationFn: async () => {
+      const toastId = toast.loading("Iniciando sincronização…");
+      let passo = await avancar({ data: { tenantId: tenantId!, origem: "manual" } });
+      for (let volta = 0; volta < 500; volta++) {
+        if (passo.concluido || passo.fase === "erro") break;
+        toast.loading(
+          passo.fase === "listando"
+            ? `Enumerando no OEM… ${passo.enfileirados} cliente(s) na fila`
+            : `Sincronizando ${passo.processados} de ${passo.enfileirados} · faltam ${passo.restantes}`,
+          { id: toastId },
+        );
+        passo = await avancar({ data: { tenantId: tenantId!, origem: "manual" } });
+      }
+      toast.dismiss(toastId);
+      return passo;
+    },
+    onSuccess: (passo) => {
+      if (passo.fase === "erro") toast.error(`Sincronização interrompida: ${passo.mensagem}`);
+      else if (passo.concluido) toast.success(`Sincronização concluída — ${passo.mensagem}`);
+      else toast.warning(`Sincronização pausada: ${passo.mensagem}`);
       queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
     },
     onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
@@ -166,9 +186,12 @@ function ClientesList() {
   }, [clientes, deferredQ, deferredCliente, deferredLicenca]);
 
   // Cards refletem o resultado FILTRADO (não a base inteira)
+  // Os quatro cartões contam a BASE INTEIRA, não a lista filtrada. Contados
+  // sobre o filtro eles viravam tautologia: ao marcar "Licença: Ativa", os
+  // baldes de bloqueada davam 0 — o cartão só repetia o filtro de volta.
   const totals = useMemo(
     () =>
-      list.reduce(
+      clientes.reduce(
         (acc, c) => {
           if (c.ativo && !c.bloqueado) acc.ativoLicAtiva++;
           else if (c.ativo && c.bloqueado) acc.ativoLicBloqueada++;
@@ -178,14 +201,17 @@ function ClientesList() {
         },
         { ativoLicAtiva: 0, ativoLicBloqueada: 0, desativadoLicAtiva: 0, desativadoLicBloqueada: 0 },
       ),
-    [list],
+    [clientes],
   );
 
   const pageTotals = useMemo(
     () =>
       list.reduce(
         (acc, c) => {
-          acc.filiais += c.filiaisAtivas;
+          // Cada linha JÁ É uma filial. Somar `filiaisAtivas` (que é o total de
+          // filiais DO GRUPO, repetido em cada linha) contava cada grupo várias
+          // vezes — dava 5.452 filiais para 2.561 existentes.
+          acc.filiais += 1;
           acc.pdvs += c.qtdPdv;
           acc.comandas += c.qtdComandas;
           acc.usuarios += c.usuariosAdicionais;
@@ -241,25 +267,15 @@ function ClientesList() {
           <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? "animate-spin" : ""}`} />
           {syncMutation.isPending ? "Sincronizando…" : "Sincronizar Base de Clientes"}
         </Button>
-        {isAdmin && zeradosLocais > 0 && (
-          <Button
-            variant="outline"
-            onClick={repararLoop}
-            disabled={reparoState.rodando}
-            className="gap-2 border-warning/50 text-warning hover:bg-warning/10"
-          >
-            {reparoState.rodando ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Wrench className="h-4 w-4" />
-            )}
-            {reparoState.rodando
-              ? `Reparando ${reparoState.feitos}${
-                  reparoState.total ? `/${reparoState.total}` : ""
-                }…`
-              : `Reparar Zerados (${zeradosLocais})`}
-          </Button>
-        )}
+        {/*
+          O botão "Reparar Zerados" foi REMOVIDO em 12/08/2026.
+          Ele chamava repararZeradosTenant, que ainda busca no host de ESCRITA
+          (pdvlegal) e usa o cálculo de custo por resíduo — exatamente a fonte
+          errada que corrompeu ~2.300 clientes nesta mesma data. Um clique nele
+          desfaria a carga correta. A sincronização normal já refaz tudo a
+          partir das fontes certas e nunca grava registro degradado, então o
+          reparo virou não só perigoso como desnecessário.
+        */}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
@@ -378,7 +394,11 @@ function ClientesList() {
               return (
               <tr
                 key={c.id}
-                className="border-b transition-colors hover:bg-muted/50"
+                // A linha inteira abre a ficha do cliente. Antes só o texto do
+                // Nome Fantasia era clicável, e ninguém achava.
+                onClick={() => navigate({ to: "/clientes/$id", params: { id: c.id } })}
+                title="Abrir ficha do cliente"
+                className="border-b transition-colors hover:bg-muted/50 cursor-pointer"
               >
                 <td className="p-2 px-3 align-middle whitespace-nowrap font-medium">{c.codigoEmpresa}</td>
                 <td className="p-2 px-3 align-middle whitespace-nowrap">{c.codigoFilial}</td>
@@ -413,7 +433,11 @@ function ClientesList() {
                     {formatBRL(c.custoMensal)}
                   </td>
                 )}
-                <td className="p-2 px-3 align-middle whitespace-nowrap">
+                <td
+                  className="p-2 px-3 align-middle whitespace-nowrap"
+                  // Botões de ação não devem abrir a ficha ao serem clicados.
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <div className="flex items-center gap-1.5">
                     {isAdmin && (
                       <>
