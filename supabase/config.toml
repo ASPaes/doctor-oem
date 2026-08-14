@@ -13,3 +13,9 @@ project_id = "furohpfhukwajhvnnbiw"
 # Um passo da carga do OEM. Chamada pelo pg_cron com a chave service_role.
 [functions.oem-sync-passo]
 verify_jwt = true
+
+# Porta de saida para o DoctorSaaS. Autentica por chave de integracao
+# (x-api-key, comparada por SHA-256), nao por JWT — quem chama e outro
+# sistema. Por isso verify_jwt = false: a chave E a autenticacao.
+[functions.oem-exportar]
+verify_jwt = false
