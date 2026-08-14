@@ -4,40 +4,71 @@
 // ---------------------------------------------------------------------------
 // POR QUE ESTE ARQUIVO EXISTE
 // ---------------------------------------------------------------------------
-// O código anterior fazia `PUT /v1/licenciamento/{emp}/{fil}` devolvendo o
-// payload inteiro do GET com uma flag trocada, e para ativar/desativar mexia em
-// `filial.ativo` e `filial.status` — campos que NÃO existem no contrato de
-// atualização. O desenvolvedor do OEM documentou por e-mail o caminho correto:
+// O contrato correto está na documentação da API, não no e-mail:
 //
-//   POST {base}/v1/licenciamento/filial
-//   { codEmpresa, codFilial, codProduto, nomeLoja, cpfCnpj,
-//     codigoTipoNegocio, codigoDetalhesTipoNegocio, codigoOrigemVenda,
-//     bloquearLicenca, desativarLicenca, usuarios, pdvComandas,
-//     modulos: [{ codigo, ativo, quantidade, valorUnitario, valorTotal }] }
+//   POST https://api.tabletcloud.com.br/licenciamento/minhaslicencas/saveFilial
+//   corpo = modelo Fiweb.Models.Licenciamentos.ModulosAPI
 //
-// "Se você for atualizar, você pode pegar os dados da filial em
-//  v1/licenciamento/{codempresa}/{codfilial} e depois passar os dados como
-//  parâmetro no endpoint acima."
+// E o detalhe que fecha o desenho: o GET
+// /licenciamento/minhaslicencas/modulos/{codproduto}/{codgrupo}/{codloja}
+// devolve EXATAMENTE esse mesmo modelo. A escrita é "leia o objeto, troque a
+// flag, devolva o objeto" — por isso aqui se espalha o payload original e se
+// acrescentam só as 7 flags que o GET não traz.
 //
 // ---------------------------------------------------------------------------
-// ⚠️ O CUIDADO QUE NÃO PODE SER PERDIDO
+// DOIS ERROS QUE CUSTARAM CARO E NÃO PODEM VOLTAR
 // ---------------------------------------------------------------------------
-// O corpo do update leva a lista de módulos INTEIRA. E o `modulos[]` que o
-// detalhe do pdvlegal devolve vem INCOMPLETO — para a PARRILLA GOLD ele traz
-// 2 de 5, faltando "Gestao" (R$ 39,90) e "PDV/Comandas" (2 × R$ 10,00).
-// Montar o corpo com essa lista provavelmente APAGARIA os módulos ausentes da
-// licença do cliente. Por isso os módulos vêm do host de LEITURA
-// (/minhaslicencas/modulos), que devolve a lista completa com valor unitário.
+// 1. O e-mail do desenvolvedor indicava POST {pdvlegal}/v1/licenciamento/filial
+//    com um corpo plano (codEmpresa/codFilial/nomeLoja/usuarios...). Esse
+//    endpoint existe, mas valida diferente e NÃO é o documentado. Tentativa
+//    real em 14/08 devolveu:
+//        HTTP 400 ["Módulo 8 inválido para o produto 1"]
+//    porque cada módulo precisa levar o `codproduto` e o `nome` que vieram da
+//    API, e o corpo remontado à mão os descartava. Nada foi gravado.
+//
+// 2. NÃO montar o `modulos[]` a partir do detalhe do pdvlegal. Ele vem
+//    incompleto (2 de 5 na PARRILLA GOLD) e às vezes VAZIO (`[]` na
+//    VAPT-VUPT 10320/12312). Enviar isso apagaria os módulos do cliente.
+//    A lista completa só existe no host documentado.
 //
 // ---------------------------------------------------------------------------
-// TRAVA DE SEGURANÇA
+// 🚫 NÃO LIGUE ISTO. Teste real em 14/08/2026 destruiu a licença de um cliente.
 // ---------------------------------------------------------------------------
-// Nada aqui roda sem OEM_ESCRITA_HABILITADA="true". A regra vigente do projeto
-// é não alterar nada no OEM enquanto a estruturação não termina, e essa regra
-// passa a ser garantida pelo código, não pela disciplina de não clicar.
+// Testado na filial 12312 (grupo 10320, VAPT-VUPT CONVENIENCIA), que estava
+// desativada e bloqueada. Duas escritas, ambas com HTTP 201:
+//
+//   1ª — objeto do GET com bloquearLicenca trocado para false.
+//        Resultado: os 54 módulos ficaram INATIVOS e valorTotal foi a 0.
+//   2ª — restauração: só os 4 módulos contratados, valores originais.
+//        Resultado imediato: os 4 voltaram, MAS com preço de tabela —
+//        Gestao 28,32 -> 39,90 e PDV/Comandas 16,88 -> 10,00. A API descarta
+//        o valorUnitario enviado. O cliente tinha preço negociado; perdeu.
+//        Minutos depois, sozinho, voltou tudo a zero de novo.
+//
+// Estado final: portal do OEM mostra zerado e não deixa editar; tabletcloud
+// devolve 0 módulos ativos; pdvlegal devolve valorTotal 59,90 e pdvComandas 0.
+// As três fontes divergem. Caso aberto com o fornecedor.
+//
+// CONCLUSÕES QUE IMPORTAM:
+//   * saveFilial NÃO é uma operação pontual. Ele regrava a filial inteira, e
+//     um efeito assíncrono do lado do OEM zera a licença depois.
+//   * A lista de módulos enviada É a lista de contratados (mandar o catálogo
+//     inteiro desativa tudo) — mas isso não salva o recurso, porque:
+//   * O PREÇO enviado é ignorado e substituído pela tabela padrão. Bloquear um
+//     cliente com preço negociado apagaria o preço dele em silêncio. Com 862
+//     clientes ativos, seria um estrago comercial em série.
+//
+// Enquanto o fornecedor não indicar um caminho que altere SÓ a flag, este
+// arquivo fica desligado. OEM_ESCRITA_HABILITADA="true" não é decisão técnica.
 // ============================================================================
 import { loadTenantCreds, obterTokenTenant, criarTokenHolderTenant } from "@/lib/tenant-oem.server";
-import { tokenLeitura, buscarProdutos, buscarModulos, oemGet } from "@/lib/oem-carga.server";
+import {
+  tokenLeitura,
+  buscarProdutos,
+  buscarModulosBruto,
+  oemGet,
+  LEITURA_BASE,
+} from "@/lib/oem-carga.server";
 
 export type MudancaLicenca = {
   /** true = licença bloqueada (sistema do cliente indisponível). */
@@ -103,7 +134,7 @@ export async function atualizarFilialOem(
     const filial = detalhe?.filial;
     if (!detalhe || !filial) throw new Error(`GET ${alvo} devolveu payload inesperado.`);
 
-    // 2) Módulos COMPLETOS, do host de leitura. Ver o aviso no topo do arquivo.
+    // 2) O objeto da licença, BRUTO, do host documentado.
     const leitura = await tokenLeitura(creds);
     const produtos = await buscarProdutos(leitura);
     const nomeProduto = String(detalhe.nomeProduto ?? "").trim().toUpperCase();
@@ -114,7 +145,8 @@ export async function atualizarFilialOem(
         `Não foi possível resolver o código do produto "${detalhe.nomeProduto ?? "(vazio)"}".`,
       );
     }
-    const { modulos } = await buscarModulos(leitura, codProduto, codEmpresa, codFilial);
+    const bruto = await buscarModulosBruto(leitura, codProduto, codEmpresa, codFilial);
+    const modulos = Array.isArray(bruto.modulos) ? bruto.modulos : [];
     if (!modulos.length) {
       throw new Error(
         "O OEM não devolveu a lista de módulos desta filial. Enviar o update sem ela poderia " +
@@ -122,35 +154,33 @@ export async function atualizarFilialOem(
       );
     }
 
-    // 3) Corpo exatamente no formato documentado.
+    // 3) Corpo = o objeto lido, com as flags trocadas.
+    //
+    // O GET de /minhaslicencas/modulos devolve exatamente o modelo que o
+    // saveFilial espera (ModulosAPI). Por isso NÃO remontamos nada campo a
+    // campo: espalhamos o objeto original e acrescentamos só as 7 flags que o
+    // GET não traz. Remontar à mão foi o que causou o HTTP 400
+    // "Módulo 8 inválido para o produto 1" — cada módulo precisa levar o
+    // `codproduto` e o `nome` que vieram da API, e eu os estava descartando.
     const corpo = {
-      codEmpresa,
-      codFilial,
-      codProduto: Number(codProduto),
-      nomeLoja: filial.nome ?? "",
-      cpfCnpj: filial.cnpj ?? "",
+      ...bruto,
       codigoTipoNegocio: filial.codTipoNegocio ?? 0,
       codigoDetalhesTipoNegocio: filial.codDetalhesTipoNegocio ?? 0,
       codigoOrigemVenda: filial.codOrigemVenda ?? 0,
-      // O que não foi pedido continua como está.
+      // O que não foi pedido continua como está hoje.
       bloquearLicenca: mudanca.bloquear ?? filial.bloqueado === true,
       desativarLicenca: mudanca.desativar ?? String(filial.status).toUpperCase() !== "AT",
-      usuarios: filial.usuarios ?? 0,
+      usuariosAdicionais: filial.usuarios ?? 0,
       pdvComandas: filial.pdvComandas ?? 0,
-      modulos: modulos.map((m) => ({
-        codigo: Number(m.codigo ?? 0),
-        ativo: m.ativo === undefined ? true : Boolean(m.ativo),
-        quantidade: Number(m.quantidade ?? 0),
-        valorUnitario: Number(m.valorUnitario ?? 0),
-        valorTotal: Number(m.valorTotal ?? m.total ?? 0),
-      })),
     };
 
-    // 4) POST no endpoint correto.
-    const respPost = await fetch(`${creds.baseUrl}/v1/licenciamento/filial`, {
+    // 4) POST no endpoint DOCUMENTADO, no host documentado.
+    // O e-mail citava POST {pdvlegal}/v1/licenciamento/filial; esse endpoint
+    // existe, mas valida diferente e não é o da documentação.
+    const respPost = await fetch(`${LEITURA_BASE}/licenciamento/minhaslicencas/saveFilial`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${escrita.value}`,
+        Authorization: `Bearer ${leitura.value}`,
         "Content-Type": "application/json",
         Accept: "application/json",
       },
@@ -158,7 +188,7 @@ export async function atualizarFilialOem(
     });
     if (!respPost.ok) {
       const preview = (await respPost.text().catch(() => "")).slice(0, 240);
-      throw new Error(`POST /v1/licenciamento/filial devolveu HTTP ${respPost.status}: ${preview}`);
+      throw new Error(`POST /minhaslicencas/saveFilial devolveu HTTP ${respPost.status}: ${preview}`);
     }
 
     // 5) Reflete localmente só o que foi realmente pedido.

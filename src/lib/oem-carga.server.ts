@@ -50,11 +50,14 @@ import {
 } from "@/lib/tenant-oem.server";
 import { parseModulosOficiais, type TokenHolder } from "@/lib/doctoroem.functions";
 
-/** Host de LEITURA. O `oem_api_base_url` do tenant continua sendo o de escrita. */
-const LEITURA_BASE = (process.env.OEM_API_LEITURA_URL ?? "https://api.tabletcloud.com.br").replace(
-  /\/+$/,
-  "",
-);
+/**
+ * Host documentado do OEM (api.tabletcloud.com.br). É a fonte de leitura E o
+ * destino da escrita — `/licenciamento/minhaslicencas/saveFilial` mora aqui.
+ * O `oem_api_base_url` do tenant (pdvlegal) só serve para ler o `bloqueado`.
+ */
+export const LEITURA_BASE = (
+  process.env.OEM_API_LEITURA_URL ?? "https://api.tabletcloud.com.br"
+).replace(/\/+$/, "");
 
 function limite(nome: string, padrao: number): number {
   const v = Number(process.env[nome]);
@@ -265,6 +268,34 @@ export async function buscarProdutos(holder: TokenHolder): Promise<Record<string
     if (p.nome && p.codigo) mapa[String(p.nome).trim().toUpperCase()] = String(p.codigo);
   }
   return mapa;
+}
+
+/**
+ * Payload BRUTO de /minhaslicencas/modulos, sem normalização nenhuma.
+ *
+ * É exatamente o objeto que `saveFilial` espera de volta (mesmo modelo
+ * ModulosAPI: codloja, nomeloja, cnpJloja, codgrupoeconomico, nomegrupo,
+ * codproduto, nomeproduto, valorTotal, modulos[]). A escrita devolve este
+ * objeto com as flags trocadas — nada é remontado à mão, e por isso nada se
+ * perde no caminho.
+ */
+export async function buscarModulosBruto(
+  holder: TokenHolder,
+  codProduto: string,
+  codGrupo: number,
+  codFilial: number,
+): Promise<Record<string, unknown>> {
+  const alvo = `módulos ${codProduto}/${codGrupo}/${codFilial}`;
+  const url = `${LEITURA_BASE}/licenciamento/minhaslicencas/modulos/${encodeURIComponent(
+    codProduto,
+  )}/${codGrupo}/${codFilial}`;
+  const resp = await oemGet(holder, url, alvo);
+  if (!resp.ok) throw new Error(`Módulos do OEM HTTP ${resp.status} em ${alvo}.`);
+  const raw = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!raw || !Array.isArray(raw.modulos)) {
+    throw new Error(`Módulos do OEM vieram sem a lista em ${alvo}.`);
+  }
+  return raw;
 }
 
 /** Módulos oficiais + valor total da filial. É a fonte de custo. */
