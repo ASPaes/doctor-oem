@@ -24,15 +24,12 @@
     // Públicos/não sensíveis. O que é segredo vai por `wrangler secret put`.
     "SUPABASE_URL": "https://furohpfhukwajhvnnbiw.supabase.co",
     "SUPABASE_PROJECT_ID": "furohpfhukwajhvnnbiw",
-    "OEM_API_LEITURA_URL": "https://api.tabletcloud.com.br",
+    "SUPABASE_PUBLISHABLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1cm9ocGZodWt3YWpodm5uYml3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NzMxOTYsImV4cCI6MjA5NjU0OTE5Nn0.5qXujfD16TtztaEL3lrp7fbwzhjypAZgBgvXzlILPgE",
 
-    // Ritmo da carga. No Workers pago são 1.000 subrequisições por requisição;
-    // 60 clientes/passo = ~120 chamadas ao OEM + ~12 ao Supabase. Folga grande.
-    "OEM_CLIENTES_POR_PASSO": "60",
-    "OEM_PAGINAS_POR_PASSO": "10",
-    "OEM_PARALELO": "3",
-    "OEM_PAUSA_MS": "1000",
-    "OEM_PASSOS_POR_CRON": "2",
+    // O host de leitura só é usado pelo caminho de ESCRITA (que monta o corpo
+    // do update com a lista completa de módulos). A carga em si roda na edge
+    // function, dentro do Supabase — o Worker não fala com o OEM para ler.
+    "OEM_API_LEITURA_URL": "https://api.tabletcloud.com.br",
 
     // Trava de escrita no OEM. Enquanto for diferente de "true", o sistema
     // apenas LÊ do OEM — bloquear/desbloquear e ativar/desativar recusam.

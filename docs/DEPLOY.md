@@ -61,10 +61,17 @@ O DNS precisa estar na Cloudflare.
   os botões de bloquear/desbloquear e ativar/desativar passam a alterar o OEM
   de verdade — e esse caminho ainda não foi validado contra a API real.
 
-## Limites do runtime que o código já respeita
+## O plano grátis do Cloudflare basta
 
-Cloudflare Workers permite **50 subrequisições por requisição no plano free** e
-**1.000 no pago**. Uma carga completa do OEM são ~5.100 chamadas — por isso a
-sincronização é feita em passos (fila em `oem_sync_fila`), cada passo com ~120
-chamadas. No plano **free** isso não cabe: baixe `OEM_CLIENTES_POR_PASSO` para
-`15` ou menos, ou o passo morre no meio.
+Cloudflare Workers permite **50 subrequisições por requisição no plano free**.
+Uma carga completa do OEM são ~5.100 chamadas — não caberia nunca.
+
+Mas **a carga não roda aqui**. Ela vive na edge function `oem-sync-passo`, no
+próprio Supabase, chamada pelo pg_cron a cada 3 minutos. O botão "Sincronizar"
+da tela apenas **invoca essa função**: 1 subrequisição, não 120.
+
+Ou seja: o Worker serve as telas e faz chamadas ao Supabase. Nada aqui chega
+perto do limite do plano grátis.
+
+O único caminho neste runtime que fala com o OEM é a **escrita** (bloquear /
+desativar), que faz ~4 chamadas por clique — e está desligada por padrão.

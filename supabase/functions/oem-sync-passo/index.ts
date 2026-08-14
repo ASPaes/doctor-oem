@@ -611,6 +611,9 @@ Deno.serve(async (req) => {
   try {
     const corpo = await req.json().catch(() => ({} as Record<string, unknown>));
     const origem = typeof corpo.origem === "string" ? corpo.origem : "cron";
+    // Sem tenantId = todas as empresas elegíveis (é o caso do cron).
+    // Com tenantId = só aquela — é o botão "Sincronizar" da tela.
+    const soTenant = typeof corpo.tenantId === "string" ? corpo.tenantId : null;
     // UM passo por invocação é o padrão: dois já estouram os 150s de parede.
     // Quem quiser mais assume o risco explicitamente pelo corpo da requisição.
     const maxPassos = Number(corpo.passos) > 0 ? Math.min(Number(corpo.passos), 5) : 1;
@@ -630,6 +633,7 @@ Deno.serve(async (req) => {
     const resultados: Record<string, unknown>[] = [];
     for (const t of tenants ?? []) {
       const tenantId = String(t.id);
+      if (soTenant && tenantId !== soTenant) continue;
       if (desligados.has(tenantId) || !comCreds.has(tenantId)) continue;
       try {
         // Sem carga em andamento? Respeita o intervalo configurado.

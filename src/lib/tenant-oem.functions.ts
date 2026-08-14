@@ -167,10 +167,8 @@ export const runTenantInitialLoad = createServerFn({ method: "POST" })
       _tenant_id: data.tenantId,
     });
     if (!isAdmin) throw new Error("Apenas administradores podem disparar a sincronização.");
-    // UM passo da carga. A carga inteira (~4.500 chamadas ao OEM) não cabe em
-    // uma requisição — quem chama repete até `concluido`. Ver oem-carga.server.
-    const { avancarCargaOem } = await import("@/lib/oem-carga.server");
-    return avancarCargaOem(data.tenantId, data.origem ?? "manual");
+    const { avancarCargaViaEdgeFunction } = await import("@/lib/oem-carga.server");
+    return avancarCargaViaEdgeFunction(data.tenantId, data.origem ?? "manual");
   });
 
 // ----- Avança a carga em lotes: chame em loop até concluido === true -----
@@ -191,8 +189,8 @@ export const avancarCargaTenant = createServerFn({ method: "POST" })
       _tenant_id: data.tenantId,
     });
     if (!isAdmin) throw new Error("Apenas administradores podem disparar a sincronização.");
-    const { avancarCargaOem } = await import("@/lib/oem-carga.server");
-    return avancarCargaOem(data.tenantId, data.origem ?? "manual");
+    const { avancarCargaViaEdgeFunction } = await import("@/lib/oem-carga.server");
+    return avancarCargaViaEdgeFunction(data.tenantId, data.origem ?? "manual");
   });
 
 // ----- Cancela a carga em andamento (destrava o "um run ativo por empresa") -----

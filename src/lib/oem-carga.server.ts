@@ -842,6 +842,74 @@ export async function avancarCargaOem(
   }
 }
 
+/**
+ * Dispara UM passo da carga chamando a edge function `oem-sync-passo`.
+ *
+ * O motor de verdade vive no Supabase (supabase/functions/oem-sync-passo), no
+ * mesmo modelo do DoctorOMIE. A tela chama por aqui em vez de rodar a própria
+ * cópia por dois motivos:
+ *
+ *   1. Existe UMA implementação só. Duas cópias divergem — e divergir aqui
+ *      significa a tela gravar de um jeito e o cron de outro.
+ *   2. O Worker faz 1 subrequisição em vez de ~120. O plano grátis do
+ *      Cloudflare permite 50 por requisição; a cópia local estouraria.
+ */
+export async function avancarCargaViaEdgeFunction(
+  tenantId: string,
+  origem: "manual" | "cron" | "carga-inicial" = "manual",
+): Promise<PassoCarga> {
+  const inicio = Date.now();
+  const url = process.env.SUPABASE_URL;
+  const chave = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !chave) {
+    throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no servidor.");
+  }
+
+  const base = url.replace(/\/+$/, "");
+  const resp = await fetch(`${base}/functions/v1/oem-sync-passo`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${chave}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ tenantId, origem, passos: 1 }),
+  });
+
+  const vazio = (fase: PassoCarga["fase"], mensagem: string): PassoCarga => ({
+    runId: null, fase, concluido: false, enfileirados: 0, processados: 0, restantes: 0,
+    inseridos: 0, atualizados: 0, falhas: 0, duracaoMs: Date.now() - inicio, mensagem,
+  });
+
+  if (resp.status === 504) {
+    // A função estourou o tempo de parede, mas o que ela já processou está
+    // gravado — a fila é o estado. Devolvemos como "em andamento" para o
+    // laço da tela chamar de novo, e não como erro.
+    return vazio("detalhando", "O passo demorou mais que o previsto e foi cortado. Continuando de onde parou.");
+  }
+  if (!resp.ok) {
+    const preview = (await resp.text().catch(() => "")).slice(0, 240);
+    return vazio("erro", `Edge function respondeu HTTP ${resp.status}: ${preview}`);
+  }
+
+  const json = (await resp.json().catch(() => null)) as
+    | { resultados?: Array<Record<string, unknown>> }
+    | null;
+  const r = json?.resultados?.[0];
+  if (!r) return vazio("erro", "A edge function não devolveu resultado para esta empresa.");
+
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    runId: null,
+    fase: (r.fase as PassoCarga["fase"]) ?? "detalhando",
+    concluido: r.concluido === true || r.status === "ignorado",
+    enfileirados: n(r.enfileirados),
+    processados: n(r.processados),
+    restantes: n(r.restantes),
+    inseridos: n(r.inseridos),
+    atualizados: n(r.atualizados),
+    falhas: n(r.falhas),
+    duracaoMs: Date.now() - inicio,
+    mensagem: String(r.mensagem ?? "Passo executado."),
+  };
+}
+
 /** Cancela o run ativo da empresa (libera o índice de "um ativo por vez"). */
 export async function cancelarCargaOem(tenantId: string): Promise<{ cancelados: number }> {
   const db = await admin();
