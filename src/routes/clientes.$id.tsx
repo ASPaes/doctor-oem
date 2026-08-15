@@ -6,11 +6,11 @@ import {
 } from "lucide-react";
 import { formatBRL, type Cliente } from "@/lib/mock-data";
 import {
-  getTenantCliente,
   runTenantInitialLoad,
   alterarStatusLicencaOem,
   alterarStatusAtivacaoOem,
 } from "@/lib/tenant-oem.functions";
+import { obterCliente } from "@/lib/oem-dados";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useTenant } from "@/lib/tenant-context";
@@ -43,13 +43,13 @@ function ClienteDetalhe() {
   const { id } = Route.useParams();
   const { activeTenant, loading: tenantLoading } = useTenant();
   const tenantId = activeTenant?.id ?? null;
-  const getFn = useServerFn(getTenantCliente);
   const runLoad = useServerFn(runTenantInitialLoad);
   const alterarStatusFn = useServerFn(alterarStatusLicencaOem);
   const alterarAtivacaoFn = useServerFn(alterarStatusAtivacaoOem);
+  // Direto do Supabase, sem o Worker no meio — ver oem-dados.ts.
   const { data: clienteOrNull, isLoading } = useQuery({
     queryKey: ["tenant-cliente", tenantId, id],
-    queryFn: () => getFn({ data: { tenantId: tenantId!, id } }),
+    queryFn: () => obterCliente(tenantId!, id),
     enabled: !!tenantId,
   });
   const { canSeeFinance } = useRole();

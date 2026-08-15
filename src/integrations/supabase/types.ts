@@ -160,6 +160,53 @@ export type Database = {
           },
         ]
       }
+      oem_api_chaves: {
+        Row: {
+          ativa: boolean
+          criada_em: string
+          criada_por: string | null
+          id: string
+          nome: string
+          prefixo: string
+          revogada_em: string | null
+          tenant_id: string
+          token_hash: string
+          ultimo_uso_em: string | null
+        }
+        Insert: {
+          ativa?: boolean
+          criada_em?: string
+          criada_por?: string | null
+          id?: string
+          nome: string
+          prefixo: string
+          revogada_em?: string | null
+          tenant_id: string
+          token_hash: string
+          ultimo_uso_em?: string | null
+        }
+        Update: {
+          ativa?: boolean
+          criada_em?: string
+          criada_por?: string | null
+          id?: string
+          nome?: string
+          prefixo?: string
+          revogada_em?: string | null
+          tenant_id?: string
+          token_hash?: string
+          ultimo_uso_em?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oem_api_chaves_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       oem_sync_config: {
         Row: {
           ativo: boolean

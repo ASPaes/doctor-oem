@@ -2,7 +2,8 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, useMemo, useDeferredValue, useTransition } from "react";
 import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2, Wrench } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
-import { listTenantClientes, avancarCargaTenant, alterarStatusLicencaOem, alterarStatusAtivacaoOem, repararClientesZerados } from "@/lib/tenant-oem.functions";
+import { avancarCargaTenant, alterarStatusLicencaOem, alterarStatusAtivacaoOem, repararClientesZerados } from "@/lib/tenant-oem.functions";
+import { listarClientes } from "@/lib/oem-dados";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useTenant } from "@/lib/tenant-context";
@@ -51,14 +52,17 @@ function ClientesList() {
   const tenantId = activeTenant?.id ?? null;
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const listFn = useServerFn(listTenantClientes);
   const avancar = useServerFn(avancarCargaTenant);
   const alterarLicFn = useServerFn(alterarStatusLicencaOem);
   const alterarAtvFn = useServerFn(alterarStatusAtivacaoOem);
   const repararFn = useServerFn(repararClientesZerados);
-  const { data: clientes = [], isLoading } = useQuery({
+  // Leitura DIRETA do Supabase, sem passar pelo Worker. Serializar as 2.564
+  // filiais lá estourava os 10ms de CPU do plano grátis do Cloudflare e virava
+  // HTTP 503 — a tela então desenhava "0 clientes" como se a base estivesse
+  // vazia. O RLS protege igual; o Worker no meio só custava CPU.
+  const { data: clientes = [], isLoading, error, refetch } = useQuery({
     queryKey: ["tenant-clientes", tenantId],
-    queryFn: () => listFn({ data: { tenantId: tenantId! } }),
+    queryFn: () => listarClientes(tenantId!),
     enabled: !!tenantId,
   });
   // Carga em lotes: cada passo processa ~100 clientes e devolve quanto falta.
@@ -232,6 +236,20 @@ function ClientesList() {
 
   if (tenantLoading || !tenantId) {
     return <div className="p-10 text-center text-muted-foreground">Selecione uma empresa no topo…</div>;
+  }
+  // Falha de leitura NÃO pode ser desenhada como lista vazia. Era o que
+  // acontecia: a consulta morria e a tela mostrava "0 clientes", como se a
+  // base estivesse vazia — ninguém tinha como saber que era erro.
+  if (error) {
+    return (
+      <div className="p-10 text-center space-y-3">
+        <p className="text-destructive font-medium">Não foi possível carregar os clientes.</p>
+        <p className="text-sm text-muted-foreground">{(error as Error).message}</p>
+        <Button variant="outline" onClick={() => refetch()} className="gap-2">
+          <RefreshCw className="h-4 w-4" /> Tentar de novo
+        </Button>
+      </div>
+    );
   }
   if (isLoading) {
     return <div className="p-10 text-center text-muted-foreground">Carregando clientes…</div>;
