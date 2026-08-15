@@ -4,11 +4,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Plug, RefreshCw, Save, Clock, KeyRound, PlugZap, Zap } from "lucide-react";
 import {
-  getTenantSyncSettings,
   updateTenantSyncSettings,
   avancarCargaTenant,
   testTenantOemConnection,
+  gerarChaveIntegracao,
+  revogarChaveIntegracao,
 } from "@/lib/tenant-oem.functions";
+import { obterSyncSettings, listarChaves } from "@/lib/oem-dados";
 import { getTenantOemSettings, upsertTenantOemSettings } from "@/lib/tenant.functions";
 import { useTenant } from "@/lib/tenant-context";
 import { Input } from "@/components/ui/input";
@@ -70,7 +72,6 @@ function ConfiguracoesPage() {
   const { activeTenant, loading: tenantLoading } = useTenant();
   const queryClient = useQueryClient();
 
-  const getSync = useServerFn(getTenantSyncSettings);
   const updateSync = useServerFn(updateTenantSyncSettings);
   const avancar = useServerFn(avancarCargaTenant);
   const getCreds = useServerFn(getTenantOemSettings);
@@ -81,7 +82,7 @@ function ConfiguracoesPage() {
 
   const { data: settings, refetch, isFetching } = useQuery({
     queryKey: ["tenant-sync", tenantId],
-    queryFn: () => getSync({ data: { tenantId: tenantId! } }),
+    queryFn: () => obterSyncSettings(tenantId!),
     enabled: !!tenantId,
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
@@ -131,6 +132,34 @@ function ConfiguracoesPage() {
       queryClient.invalidateQueries({ queryKey: ["tenant-sync", tenantId] });
     },
     onError: (err: Error) => toast.error(`Falha ao salvar: ${err.message}`),
+  });
+
+  // Chaves de integração: leitura direta (RLS limita ao tenant), geração e
+  // revogação por função de servidor, que exige admin da empresa.
+  const [chaveNova, setChaveNova] = useState<string | null>(null);
+  const gerarChave = useServerFn(gerarChaveIntegracao);
+  const revogarChave = useServerFn(revogarChaveIntegracao);
+  const { data: chaves = [] } = useQuery({
+    queryKey: ["oem-chaves", tenantId],
+    queryFn: () => listarChaves(tenantId!),
+    enabled: !!tenantId,
+  });
+  const gerarChaveMutation = useMutation({
+    mutationFn: () =>
+      gerarChave({ data: { tenantId: tenantId!, nome: "DoctorSaaS" } }),
+    onSuccess: ({ chave }) => {
+      setChaveNova(chave);
+      queryClient.invalidateQueries({ queryKey: ["oem-chaves", tenantId] });
+    },
+    onError: (err: Error) => toast.error(`Falha ao gerar chave: ${err.message}`),
+  });
+  const revogarMutation = useMutation({
+    mutationFn: (id: string) => revogarChave({ data: { tenantId: tenantId!, id } }),
+    onSuccess: () => {
+      toast.success("Chave revogada.");
+      queryClient.invalidateQueries({ queryKey: ["oem-chaves", tenantId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
   });
 
   // A carga completa faz ~2 chamadas ao OEM por cliente — não cabe numa
@@ -316,6 +345,98 @@ function ConfiguracoesPage() {
               : "Carga inicial / sincronizar agora"}
           </Button>
         </div>
+      </div>
+
+      {/* ---------------------------------------------------------------
+          Chave de integração: é por ela que o DoctorSaaS lê esta empresa.
+          Guardamos só o SHA-256 — a chave em claro aparece uma única vez.
+          --------------------------------------------------------------- */}
+      <div className="glass-panel rounded-2xl p-6 space-y-4 max-w-3xl">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="grid h-11 w-11 place-items-center rounded-xl bg-[image:var(--gradient-primary)] text-primary-foreground">
+              <KeyRound className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-semibold leading-tight">Chave de integração</p>
+              <p className="text-xs text-muted-foreground">
+                Use no DoctorSaaS, em Configurações › Integrações › OEM.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => gerarChaveMutation.mutate()}
+            disabled={gerarChaveMutation.isPending}
+            className="gap-2"
+          >
+            <KeyRound className="h-4 w-4" />
+            {gerarChaveMutation.isPending ? "Gerando…" : "Gerar chave"}
+          </Button>
+        </div>
+
+        {chaveNova && (
+          <div className="rounded-xl border border-success/40 bg-success/10 p-4 space-y-2">
+            <p className="text-sm font-medium text-success">
+              Copie agora — ela não aparece de novo.
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 rounded-lg bg-background/60 px-3 py-2 text-xs break-all">
+                {chaveNova}
+              </code>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  navigator.clipboard?.writeText(chaveNova).catch(() => {});
+                  toast.success("Chave copiada.");
+                }}
+              >
+                Copiar
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Guardamos apenas o resumo criptográfico dela. Se perder, gere outra e revogue esta.
+            </p>
+          </div>
+        )}
+
+        {chaves.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Nenhuma chave gerada. Sem uma chave, o DoctorSaaS não tem como ler esta empresa.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border rounded-xl border border-border">
+            {chaves.map((k) => (
+              <li key={k.id} className="flex items-center gap-3 px-4 py-3 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium truncate">{k.nome}</p>
+                  <p className="font-mono text-xs text-muted-foreground">{k.prefixo}…</p>
+                </div>
+                <div className="text-right text-xs text-muted-foreground">
+                  {k.ultimo_uso_em
+                    ? `usada ${new Date(k.ultimo_uso_em).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
+                    : "nunca usada"}
+                </div>
+                {k.ativa ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive"
+                    onClick={() => {
+                      if (window.confirm(`Revogar a chave "${k.nome}"? O DoctorSaaS para de ler esta empresa na hora.`)) {
+                        revogarMutation.mutate(k.id);
+                      }
+                    }}
+                  >
+                    Revogar
+                  </Button>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">revogada</Badge>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="glass-panel rounded-2xl p-6 space-y-6 max-w-3xl">

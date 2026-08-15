@@ -193,6 +193,71 @@ export const avancarCargaTenant = createServerFn({ method: "POST" })
     return avancarCargaViaEdgeFunction(data.tenantId, data.origem ?? "manual");
   });
 
+// ============================================================================
+// Chaves de integração — é por elas que o DoctorSaaS lê esta empresa.
+//
+// Guardamos só o SHA-256. A chave em claro é devolvida UMA vez, na criação, e
+// nunca mais: não existe "ver de novo". Perdeu, gera outra e revoga a velha.
+// ============================================================================
+
+async function sha256Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export const gerarChaveIntegracao = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z.object({ tenantId: z.string().uuid(), nome: z.string().min(2).max(80) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: isAdmin } = await supabase.rpc("is_tenant_admin", {
+      _user_id: userId,
+      _tenant_id: data.tenantId,
+    });
+    if (!isAdmin) throw new Error("Apenas administradores podem gerar chaves.");
+
+    // 32 bytes de aleatoriedade do próprio runtime — sem depender de lib.
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    const chave =
+      "oem_live_" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin.from("oem_api_chaves").insert({
+      tenant_id: data.tenantId,
+      nome: data.nome,
+      token_hash: await sha256Hex(chave),
+      prefixo: chave.slice(0, 17),
+      criada_por: userId,
+    });
+    if (error) throw new Error(`oem_api_chaves: ${error.message}`);
+
+    // Única vez que a chave em claro sai daqui.
+    return { chave };
+  });
+
+export const revogarChaveIntegracao = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => z.object({ tenantId: z.string().uuid(), id: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { data: isAdmin } = await supabase.rpc("is_tenant_admin", {
+      _user_id: userId,
+      _tenant_id: data.tenantId,
+    });
+    if (!isAdmin) throw new Error("Apenas administradores podem revogar chaves.");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin
+      .from("oem_api_chaves")
+      .update({ ativa: false, revogada_em: new Date().toISOString() })
+      .eq("id", data.id)
+      .eq("tenant_id", data.tenantId);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });
+
 // ----- Cancela a carga em andamento (destrava o "um run ativo por empresa") -----
 export const cancelarCargaTenant = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
