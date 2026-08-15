@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, useMemo, useDeferredValue, useTransition } from "react";
 import { Search, RefreshCw, Store, Monitor, DollarSign, Activity, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, Power, PowerOff, Loader2, Wrench } from "lucide-react";
 import { formatBRL } from "@/lib/mock-data";
-import { avancarCargaTenant, alterarStatusLicencaOem, alterarStatusAtivacaoOem, repararClientesZerados } from "@/lib/tenant-oem.functions";
+import { avancarCargaTenant, alterarStatusLicencaOem, alterarStatusAtivacaoOem } from "@/lib/tenant-oem.functions";
 import { listarClientes } from "@/lib/oem-dados";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -55,7 +55,6 @@ function ClientesList() {
   const avancar = useServerFn(avancarCargaTenant);
   const alterarLicFn = useServerFn(alterarStatusLicencaOem);
   const alterarAtvFn = useServerFn(alterarStatusAtivacaoOem);
-  const repararFn = useServerFn(repararClientesZerados);
   // Leitura DIRETA do Supabase, sem passar pelo Worker. Serializar as 2.564
   // filiais lá estourava os 10ms de CPU do plano grátis do Cloudflare e virava
   // HTTP 503 — a tela então desenhava "0 clientes" como se a base estivesse
@@ -92,59 +91,6 @@ function ClientesList() {
     },
     onError: (err: Error) => toast.error(`Falha ao sincronizar base: ${err.message}`),
   });
-
-  // Reparo incremental: dispara em loop até a fila zerar. Cada chamada
-  // processa um batch pequeno (cabe no tempo do Worker) e devolve o restante.
-  const [reparoState, setReparoState] = useState<{
-    rodando: boolean;
-    feitos: number;
-    restantes: number | null;
-    total: number | null;
-  }>({ rodando: false, feitos: 0, restantes: null, total: null });
-
-  async function repararLoop() {
-    if (!tenantId) return;
-    setReparoState({ rodando: true, feitos: 0, restantes: null, total: null });
-    const toastId = toast.loading("Reparando clientes zerados…");
-    let feitos = 0;
-    let consecutivosVazios = 0;
-    try {
-      for (let i = 0; i < 200; i++) {
-        const res = await repararFn({ data: { tenantId, batchSize: 40 } });
-        feitos += res.atualizados;
-        setReparoState({
-          rodando: true,
-          feitos,
-          restantes: res.restantes,
-          total: res.totalZerados,
-        });
-        toast.loading(
-          `Reparando: ${feitos} corrigidos, ~${res.restantes} restantes…`,
-          { id: toastId },
-        );
-        if (res.processados === 0) break;
-        if (res.atualizados === 0) {
-          consecutivosVazios += 1;
-          if (consecutivosVazios >= 3) break; // mesmos clientes falhando — para
-        } else {
-          consecutivosVazios = 0;
-        }
-      }
-      toast.success(`Reparo concluído: ${feitos} clientes atualizados.`, { id: toastId });
-      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
-    } catch (err) {
-      toast.error(`Falha no reparo: ${err instanceof Error ? err.message : err}`, { id: toastId });
-    } finally {
-      setReparoState((s) => ({ ...s, rodando: false }));
-      queryClient.invalidateQueries({ queryKey: ["tenant-clientes", tenantId] });
-    }
-  }
-
-  // Conta zerados localmente (rápido) para exibir no botão sem chamar API
-  const zeradosLocais = useMemo(
-    () => clientes.filter((c) => (c.custoMensal ?? 0) <= 0 || c.modulos.length === 0).length,
-    [clientes],
-  );
 
   // Mutations por linha — controlam loading individual via variável `pendingId`
   const [pendingId, setPendingId] = useState<string | null>(null);

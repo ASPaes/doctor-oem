@@ -372,223 +372,6 @@ function mapCliente(row: ClienteRow): Cliente {
 // Clientes
 // ============================================================
 
-export const listClientes = createServerFn({ method: "GET" }).handler(
-  async (): Promise<Cliente[]> => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
-    const { data, error } = await supabase
-      .from("clientes_oem")
-      .select("*")
-      .order("nome_fantasia", { ascending: true });
-    if (error) throw new Error(`DoctorOEM listClientes: ${error.message}`);
-    return (data ?? []).map((r) => mapCliente(r as ClienteRow));
-  },
-);
-
-export const getCliente = createServerFn({ method: "GET" })
-  .inputValidator((input) => z.object({ id: z.string().uuid() }).parse(input))
-  .handler(async ({ data }): Promise<Cliente | null> => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
-    const { data: row, error } = await supabase
-      .from("clientes_oem")
-      .select("*")
-      .eq("id", data.id)
-      .maybeSingle();
-    if (error) throw new Error(`DoctorOEM getCliente: ${error.message}`);
-    return row ? mapCliente(row as ClienteRow) : null;
-  });
-
-export const forceSyncCliente = createServerFn({ method: "POST" })
-  .inputValidator((input) => z.object({ id: z.string().uuid() }).parse(input))
-  .handler(async ({ data }): Promise<Cliente | null> => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
-
-    // 1) Carrega o cliente atual para obter cnpj_cpf e códigos.
-    const { data: current, error: curErr } = await supabase
-      .from("clientes_oem")
-      .select("*")
-      .eq("id", data.id)
-      .maybeSingle();
-    if (curErr) throw new Error(`DoctorOEM forceSync (load): ${curErr.message}`);
-    if (!current) return null;
-
-    const currentRow = current as ClienteRow;
-
-    // 2) Credenciais obrigatórias para o fluxo OAuth2.
-    const clientId = process.env.OEM_CLIENT_ID;
-    const clientSecret = process.env.OEM_CLIENT_SECRET;
-    const username = process.env.OEM_API_USERNAME;
-    const password = process.env.OEM_API_PASSWORD;
-    if (!clientId || !clientSecret || !username || !password) {
-      throw new Error(
-        "OEM API: secrets OEM_CLIENT_ID, OEM_CLIENT_SECRET, OEM_API_USERNAME e OEM_API_PASSWORD são obrigatórios.",
-      );
-    }
-
-    const API_ORIGIN = "https://api.pdvlegal.com.br";
-
-    // 3) ETAPA 1 — Autenticação OAuth2 (password grant) para obter o access_token.
-    const tokenBody = new URLSearchParams({
-      username,
-      password,
-      grant_type: "password",
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
-
-    console.log("[OEM forceSync] OAuth2: solicitando token em", `${API_ORIGIN}/token`);
-    const tokenResp = await fetch(`${API_ORIGIN}/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: tokenBody.toString(),
-    });
-
-    if (!tokenResp.ok) {
-      const text = await tokenResp.text().catch(() => "");
-      console.error("[OEM forceSync] falha na autenticação:", {
-        status: tokenResp.status,
-        preview: text.slice(0, 200),
-      });
-      throw new Error(
-        `OEM API: falha na autenticação OAuth2 (HTTP ${tokenResp.status}). Verifique usuário/senha e credenciais do client.`,
-      );
-    }
-
-    const tokenJson = (await tokenResp.json().catch(() => ({}))) as Record<string, unknown>;
-    const accessToken = typeof tokenJson.access_token === "string" ? tokenJson.access_token : null;
-    if (!accessToken) {
-      throw new Error("OEM API: resposta de token sem o campo access_token.");
-    }
-    console.log("[OEM forceSync] OAuth2: access_token obtido com sucesso.");
-
-    // 4) ETAPA 2 — Consulta real de licenciamento usando o token.
-    //    Extrai códigos numéricos: suporta "EMP-2004/001", "2004", 2004 etc.
-    function extractCodigoEmpresa(v: unknown): number | null {
-      if (typeof v === "number" && Number.isFinite(v)) return v;
-      const s = typeof v === "string" ? v.trim() : "";
-      if (!s) return null;
-      const m = s.match(/EMP-(\d+)/i);
-      if (m) return parseInt(m[1], 10);
-      const n = parseInt(s.replace(/\D/g, ""), 10);
-      return Number.isFinite(n) ? n : null;
-    }
-    function extractCodigoFilial(v: unknown): number | null {
-      if (typeof v === "number" && Number.isFinite(v)) return v;
-      const s = typeof v === "string" ? v.trim() : "";
-      if (!s) return null;
-      const n = parseInt(s.replace(/\D/g, ""), 10);
-      return Number.isFinite(n) ? n : null;
-    }
-
-    const codEmpresa = extractCodigoEmpresa(currentRow.empresa_codigo);
-    const codFilial = extractCodigoFilial(currentRow.filial_codigo);
-    if (codEmpresa == null || codFilial == null) {
-      throw new Error(
-        `OEM API: não foi possível extrair códigos numéricos de empresa/filial a partir de "${currentRow.empresa_codigo}" / "${currentRow.filial_codigo}".`,
-      );
-    }
-
-    const licUrl = `${API_ORIGIN}/v1/licenciamento/${codEmpresa}/${codFilial}`;
-
-    console.log("[OEM forceSync] GET licenciamento:", redactSensitiveUrl(licUrl));
-    const licResp = await fetch(licUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-      },
-    });
-
-    if (!licResp.ok) {
-      const text = await licResp.text().catch(() => "");
-      console.error("[OEM forceSync] falha na consulta de licenciamento:", {
-        status: licResp.status,
-        preview: text.slice(0, 200),
-      });
-      throw new Error(
-        `OEM API: consulta de licenciamento falhou (HTTP ${licResp.status}) para empresa ${currentRow.empresa_codigo}/${currentRow.filial_codigo}.`,
-      );
-    }
-
-    const raw = (await licResp.json().catch(() => ({}))) as Record<string, unknown>;
-    const lic = unwrapLicenciamentoPayload(raw);
-
-    console.log("[OEM forceSync] payload real recebido:", JSON.stringify(lic).slice(0, 400));
-
-    // 5) Mapeia o retorno real (codEmpresa, codFilial, nomeLoja, cpfCnpj,
-    //    bloquearLicenca, pdvComandas, ...) para as colunas de clientes_oem.
-    const str = (v: unknown): string | undefined =>
-      typeof v === "string" && v.trim() !== "" ? v : undefined;
-    const num = (v: unknown): number | undefined => {
-      const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
-      return Number.isFinite(n) ? n : undefined;
-    };
-    const bool = (v: unknown): boolean | undefined =>
-      typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : undefined;
-
-  const filialObjSync =
-    lic.filial && typeof lic.filial === "object" && !Array.isArray(lic.filial)
-      ? (lic.filial as Record<string, unknown>)
-      : undefined;
-
-  const bloqueado = bool(lic.bloquearLicenca ?? filialObjSync?.bloqueado ?? lic.bloqueado);
-  const pdvComandas = num(filialObjSync?.pdvComandas ?? lic.pdvComandas ?? lic.qtdPdvComandas);
-
-    const update: Record<string, unknown> = { last_sync: new Date().toISOString() };
-
-    // NÃO sobrescrevemos empresa_codigo/filial_codigo aqui: esses campos guardam
-    // o codGrupo + codFilial vindos da LISTAGEM do OEM (o que o usuário enxerga).
-    // O detalhe devolve códigos internos diferentes — usá-los corromperia a chave.
-    const nomeLoja = str(lic.nomeEmpresa ?? lic.nomeLoja ?? lic.nomeFantasia);
-    if (nomeLoja) update.nome_fantasia = nomeLoja;
-    const razao = str(lic.razaoSocial ?? lic.razao_social ?? lic.nomeEmpresa);
-    if (razao) update.razao_social = razao;
-    const cpfCnpj = str(lic.cnpjEmpresa ?? lic.cpfCnpj ?? lic.cnpjCpf);
-    if (cpfCnpj) update.cnpj_cpf = cpfCnpj;
-    const grupo = str(lic.grupoEconomico ?? lic.nomegrupo);
-    if (grupo) update.grupo_economico = grupo;
-    const produto = str(lic.nomeProduto ?? lic.produto ?? lic.produtoPrincipal);
-    if (produto) update.produto_principal = produto;
-    const filiais = num(lic.numeroFiliais ?? lic.qtdFiliais);
-    if (filiais !== undefined) update.numero_filiais = filiais;
-    const usuarios = num(filialObjSync?.usuarios ?? lic.usuarios ?? lic.usuariosAdicionais);
-    if (usuarios !== undefined) update.usuarios_adicionais = usuarios;
-    const { modulos: modulosExtraidos, custo: custoModulos } = extrairModulosECusto(lic);
-    const modulosNorm = modulosExtraidos;
-    const qtdPdvApi = num(lic.qtdPdv ?? lic.pdvs) ?? pdvComandas;
-    const qtdPdvModulo = getQuantidadeModulo(modulosNorm, /PDV/i);
-    const qtdPdv = qtdPdvModulo ?? qtdPdvApi ?? 0;
-    update.qtd_pdv = qtdPdv;
-    update.qtd_pdv_comandas = qtdPdv;
-    update.bloqueado = bloqueado ?? false;
-    update.status = bloqueado ? "Bloqueado" : "Ativo";
-    const motivo = str(lic.motivoBloqueio);
-    if (motivo) update.motivo_bloqueio = motivo;
-    console.log("[OEM forceSync] modulos finais:", JSON.stringify(modulosNorm ?? []).slice(0, 400));
-    if (modulosNorm) update.modulos_ativos = modulosNorm;
-    const qtdComandasApi = num(lic.qtdComandas ?? lic.comandas);
-    update.qtd_comandas = calcularComandas(qtdComandasApi, modulosNorm);
-    update.custo_total =
-      custoModulos ?? num(filialObjSync?.valorTotal ?? lic.custoTotal ?? lic.valorTotal) ?? 0;
-    if (Array.isArray(lic.licencas ?? lic.licencasDetalhe)) {
-      update.licencas_detalhe = lic.licencas ?? lic.licencasDetalhe;
-    }
-
-    const { data: row, error } = await supabase
-      .from("clientes_oem")
-      .update(update)
-      .eq("id", data.id)
-      .select("*")
-      .maybeSingle();
-    if (error) throw new Error(`DoctorOEM forceSync (save): ${error.message}`);
-    return row ? mapCliente(row as ClienteRow) : null;
-  });
-
 // ============================================================
 // Bulk sync — carga inicial REAL via OAuth2 + varredura de
 // licenciamentos na TabletCloud (/v1/licenciamento/{emp}/{fil}).
@@ -1051,32 +834,13 @@ export function criarTokenHolder(escopo: string, initial = ""): TokenHolder {
   return holder;
 }
 
-export const bulkSyncClientes = createServerFn({ method: "POST" }).handler(
-  async (): Promise<{ inserted: number; updated: number; total: number; scanned: number }> => {
-    const { runBulkImportOem } = await import("@/lib/oem-import.server");
-    const result = await runBulkImportOem("bulkSync");
-
-    console.log(
-      `[OEM bulkSync] concluído via ${result.origem}: ${result.updated} atualizados, ${result.inserted} novos, ${result.scanned} consultas, ${result.falhas} falhas.`,
-    );
-
-    return {
-      inserted: result.inserted,
-      updated: result.updated,
-      total: result.total,
-      scanned: result.scanned,
-    };
-  },
-);
-
 // ============================================================
 // Profiles / Usuários (combina profiles + auth.users)
 // ============================================================
 
 export const listUsuarios = createServerFn({ method: "GET" }).handler(
   async (): Promise<UserAccount[]> => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
+    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
 
     const [{ data: profiles, error: pErr }, { data: usersResp, error: uErr }] =
       await Promise.all([
@@ -1128,8 +892,7 @@ export type GatewayEntry = {
 
 export const listGateways = createServerFn({ method: "GET" }).handler(
   async (): Promise<GatewayEntry[]> => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
+    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
     const { data, error } = await supabase
       .from("developer_gateways")
       .select("id, client_id, api_token_hash, webhook_url, webhook_events, created_at")
@@ -1161,8 +924,7 @@ export const createGateway = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data }) => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
+    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
     // Token gerado server-side; armazenamos só um hash (simulado).
     const raw = `xak_live_${crypto.randomUUID().replace(/-/g, "")}`;
     const hash = await sha256Hex(raw);
@@ -1209,8 +971,7 @@ export const listWebhookLogs = createServerFn({ method: "GET" })
       .parse(input),
   )
   .handler(async ({ data }): Promise<WebhookLogEntry[]> => {
-    const { getDoctorOemAdmin } = await import("@/lib/doctoroem-admin.server");
-    const supabase = getDoctorOemAdmin();
+    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
     let query = supabase
       .from("webhook_logs")
       .select(

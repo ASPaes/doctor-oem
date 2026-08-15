@@ -9,7 +9,7 @@ import {
   getTenantOemSettings,
   upsertTenantOemSettings,
 } from "@/lib/tenant.functions";
-import { testTenantOemConnection, runTenantInitialLoad } from "@/lib/tenant-oem.functions";
+import { testTenantOemConnection, avancarCargaTenant } from "@/lib/tenant-oem.functions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -302,7 +302,7 @@ function Field({
 }
 
 function CargaInicialButton({ tenantId, tenantNome }: { tenantId: string; tenantNome: string }) {
-  const run = useServerFn(runTenantInitialLoad);
+  const run = useServerFn(avancarCargaTenant);
   const [pending, setPending] = useState(false);
   return (
     <Button

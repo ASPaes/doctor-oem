@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { formatBRL, type Cliente } from "@/lib/mock-data";
 import {
-  runTenantInitialLoad,
+  avancarCargaTenant,
   alterarStatusLicencaOem,
   alterarStatusAtivacaoOem,
 } from "@/lib/tenant-oem.functions";
@@ -43,7 +43,7 @@ function ClienteDetalhe() {
   const { id } = Route.useParams();
   const { activeTenant, loading: tenantLoading } = useTenant();
   const tenantId = activeTenant?.id ?? null;
-  const runLoad = useServerFn(runTenantInitialLoad);
+  const runLoad = useServerFn(avancarCargaTenant);
   const alterarStatusFn = useServerFn(alterarStatusLicencaOem);
   const alterarAtivacaoFn = useServerFn(alterarStatusAtivacaoOem);
   // Direto do Supabase, sem o Worker no meio — ver oem-dados.ts.

@@ -3,8 +3,7 @@ import { Building2, ShieldAlert, CircuitBoard, ArrowUpRight, TrendingUp, Store, 
 import { formatBRL } from "@/lib/mock-data";
 import { Badge } from "@/components/ui/badge";
 import { useQuery } from "@tanstack/react-query";
-import { useServerFn } from "@tanstack/react-start";
-import { listTenantClientes, getTenantSyncSettings } from "@/lib/tenant-oem.functions";
+import { obterSyncSettings, listarClientes } from "@/lib/oem-dados";
 import { useRole } from "@/lib/role-context";
 import { useTenant } from "@/lib/tenant-context";
 
@@ -41,17 +40,15 @@ function Index() {
   const { canSeeFinance } = useRole();
   const { activeTenant, loading: tenantLoading } = useTenant();
   const tenantId = activeTenant?.id ?? null;
-  const listFn = useServerFn(listTenantClientes);
-  const syncFn = useServerFn(getTenantSyncSettings);
 
   const { data: clientes = [] } = useQuery({
     queryKey: ["tenant-clientes", tenantId],
-    queryFn: () => listFn({ data: { tenantId: tenantId! } }),
+    queryFn: () => listarClientes(tenantId!),
     enabled: !!tenantId,
   });
   const { data: sync } = useQuery({
     queryKey: ["tenant-sync", tenantId],
-    queryFn: () => syncFn({ data: { tenantId: tenantId! } }),
+    queryFn: () => obterSyncSettings(tenantId!),
     enabled: !!tenantId,
   });
 
