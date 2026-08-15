@@ -245,24 +245,22 @@ async function buscarBloqueio(creds: Creds, h: Holder, grupo: number, filial: nu
 
 // --------------------------------------------------------------- o passo
 
+// Senha e client_secret vivem no Vault desde 15/08/2026 — as colunas em claro
+// não existem mais. A RPC é o único caminho, e só o service_role a executa.
 async function carregarCreds(db: SupabaseClient, tenantId: string): Promise<Creds> {
-  const { data, error } = await db
-    .from("tenant_oem_settings")
-    .select("oem_api_base_url, oem_api_username, oem_api_password, oem_client_id, oem_client_secret, oem_api_method")
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
-  if (error) throw new Error(`tenant_oem_settings: ${error.message}`);
+  const { data, error } = await db.rpc("obter_credenciais_oem", { p_tenant_id: tenantId });
+  if (error) throw new Error(`obter_credenciais_oem: ${error.message}`);
   if (!data) throw new Error("Credenciais OEM não cadastradas para esta empresa.");
-  const faltando = ["oem_api_username", "oem_api_password", "oem_client_id", "oem_client_secret"]
-    .filter((k) => !(data as Record<string, unknown>)[k]);
+  const c = data as Record<string, string | null>;
+  const faltando = ["username", "password", "client_id", "client_secret"].filter((k) => !c[k]);
   if (faltando.length) throw new Error(`Credenciais OEM incompletas: ${faltando.join(", ")}.`);
   return {
-    baseUrl: (data.oem_api_base_url ?? "https://api.pdvlegal.com.br").replace(/\/+$/, ""),
-    username: data.oem_api_username!,
-    password: data.oem_api_password!,
-    clientId: data.oem_client_id!,
-    clientSecret: data.oem_client_secret!,
-    method: data.oem_api_method ?? "password",
+    baseUrl: (c.base_url ?? "https://api.pdvlegal.com.br").replace(/\/+$/, ""),
+    username: c.username!,
+    password: c.password!,
+    clientId: c.client_id!,
+    clientSecret: c.client_secret!,
+    method: c.method ?? "password",
   };
 }
 
@@ -622,12 +620,14 @@ Deno.serve(async (req) => {
     const { data: tenants, error: errT } = await db.from("tenants").select("id, nome").eq("ativo", true);
     if (errT) throw new Error(`tenants: ${errT.message}`);
     const { data: cfgs } = await db.from("oem_sync_config").select("tenant_id, ativo, intervalo_horas");
+    // Os segredos estão no cofre: aqui só dá para conferir se existe cofre.
+    // O conteúdo é validado no carregarCreds, já dentro do passo da empresa.
     const { data: sets } = await db.from("tenant_oem_settings")
-      .select("tenant_id, oem_api_username, oem_api_password, oem_client_id, oem_client_secret");
+      .select("tenant_id, oem_api_username, oem_client_id, vault_secret_id");
 
     const desligados = new Set((cfgs ?? []).filter((c: any) => c.ativo === false).map((c: any) => String(c.tenant_id)));
     const comCreds = new Set((sets ?? []).filter((s: any) =>
-      s.oem_api_username && s.oem_api_password && s.oem_client_id && s.oem_client_secret,
+      s.oem_api_username && s.oem_client_id && s.vault_secret_id,
     ).map((s: any) => String(s.tenant_id)));
 
     const resultados: Record<string, unknown>[] = [];

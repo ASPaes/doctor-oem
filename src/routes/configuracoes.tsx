@@ -117,9 +117,9 @@ function ConfiguracoesPage() {
       setCredForm({
         oem_api_base_url: creds.oem_api_base_url ?? "https://api.pdvlegal.com.br",
         oem_api_username: creds.oem_api_username ?? "",
-        oem_api_password: creds.oem_api_password ?? "",
+        oem_api_password: "",
         oem_client_id: creds.oem_client_id ?? "",
-        oem_client_secret: creds.oem_client_secret ?? "",
+        oem_client_secret: "",
       });
       setCredLoaded(tenantId);
     }
@@ -294,6 +294,7 @@ function ConfiguracoesPage() {
                 value={credForm.oem_api_password}
                 onChange={(e) => setCredForm({ ...credForm, oem_api_password: e.target.value })}
                 autoComplete="new-password"
+                placeholder={creds?.tem_segredos ? "•••••••• guardada no cofre" : "não cadastrada"}
               />
             </div>
             <div className="space-y-1.5">
@@ -311,8 +312,13 @@ function ConfiguracoesPage() {
                 value={credForm.oem_client_secret}
                 onChange={(e) => setCredForm({ ...credForm, oem_client_secret: e.target.value })}
                 autoComplete="new-password"
+                placeholder={creds?.tem_segredos ? "•••••••• guardado no cofre" : "não cadastrado"}
               />
             </div>
+            <p className="text-xs text-muted-foreground sm:col-span-2">
+              Senha e Client Secret ficam no cofre do Supabase e não são mais legíveis pela tela.
+              Deixe em branco para manter os que já estão gravados.
+            </p>
           </div>
         )}
         <div className="flex flex-wrap gap-3 border-t border-border pt-4">

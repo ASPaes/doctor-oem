@@ -88,36 +88,42 @@ export function buildResumoFallback(
   };
 }
 
+/**
+ * Senha e client_secret vivem no Vault desde 15/08/2026 — não existem mais como
+ * coluna. A RPC obter_credenciais_oem é o único caminho, e só o service_role a
+ * executa: nem um admin com acesso à tabela consegue ler a senha do OEM.
+ */
 export async function loadTenantCreds(tenantId: string): Promise<TenantCreds> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data, error } = await supabaseAdmin
-    .from("tenant_oem_settings")
-    .select(
-      "oem_api_base_url, oem_api_username, oem_api_password, oem_client_id, oem_client_secret, oem_api_method",
-    )
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
-  if (error) throw new Error(`tenant_oem_settings: ${error.message}`);
+  const { data, error } = await supabaseAdmin.rpc("obter_credenciais_oem", {
+    p_tenant_id: tenantId,
+  });
+  if (error) throw new Error("obter_credenciais_oem: " + error.message);
   if (!data) throw new Error("Credenciais OEM não cadastradas para esta empresa.");
-  const missing: string[] = [];
-  if (!data.oem_api_username) missing.push("usuário");
-  if (!data.oem_api_password) missing.push("senha");
-  if (!data.oem_client_id) missing.push("client_id");
-  if (!data.oem_client_secret) missing.push("client_secret");
-  if (missing.length) {
+
+  const c = data as unknown as Record<string, string | null>;
+  const faltando: string[] = [];
+  if (!c.username) faltando.push("usuário");
+  if (!c.password) faltando.push("senha");
+  if (!c.client_id) faltando.push("client_id");
+  if (!c.client_secret) faltando.push("client_secret");
+  if (faltando.length) {
     throw new Error(
-      `Credenciais OEM incompletas (faltam: ${missing.join(", ")}). Preencha em Configurações.`,
+      "Credenciais OEM incompletas (faltam: " + faltando.join(", ") +
+        "). Preencha em Configurações.",
     );
   }
+
   return {
-    baseUrl: (data.oem_api_base_url ?? "https://api.pdvlegal.com.br").replace(/\/+$/, ""),
-    username: data.oem_api_username!,
-    password: data.oem_api_password!,
-    clientId: data.oem_client_id!,
-    clientSecret: data.oem_client_secret!,
-    method: data.oem_api_method ?? "password",
+    baseUrl: (c.base_url ?? "https://api.pdvlegal.com.br").replace(/\/+$/, ""),
+    username: c.username!,
+    password: c.password!,
+    clientId: c.client_id!,
+    clientSecret: c.client_secret!,
+    method: c.method ?? "password",
   };
 }
+
 
 // Margem de segurança antes do vencimento do token (renova 2 min antes).
 const TOKEN_MARGEM_MS = 120_000;

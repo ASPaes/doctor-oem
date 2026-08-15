@@ -156,13 +156,22 @@ export const getTenantOemSettings = createServerFn({ method: "GET" })
   .inputValidator((d) => z.object({ tenantId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
+    // Senha e client_secret NÃO saem daqui: vivem no Vault desde 15/08/2026.
+    // A tela precisa saber se existem, não quais são.
     const { data: row, error } = await supabase
       .from("tenant_oem_settings")
-      .select("*")
+      .select("oem_api_base_url, oem_api_method, oem_api_username, oem_client_id, vault_secret_id")
       .eq("tenant_id", data.tenantId)
       .maybeSingle();
     if (error) throw new Error(error.message);
-    return row;
+    if (!row) return null;
+    return {
+      oem_api_base_url: row.oem_api_base_url,
+      oem_api_method: row.oem_api_method,
+      oem_api_username: row.oem_api_username,
+      oem_client_id: row.oem_client_id,
+      tem_segredos: !!row.vault_secret_id,
+    };
   });
 
 export const upsertTenantOemSettings = createServerFn({ method: "POST" })
@@ -171,9 +180,6 @@ export const upsertTenantOemSettings = createServerFn({ method: "POST" })
     z
       .object({
         tenant_id: z.string().uuid(),
-        // Os campos doctoroem_url / tabletcloud_* saíram: eram do desenho
-        // abandonado de "um Supabase externo por empresa". Hoje tudo vive no
-        // banco central e a integração é direta com a API OEM.
         oem_api_base_url: z.string().url().nullable().optional(),
         oem_api_username: z.string().max(200).nullable().optional(),
         oem_api_password: z.string().max(200).nullable().optional(),
@@ -185,9 +191,18 @@ export const upsertTenantOemSettings = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const { error } = await supabase
-      .from("tenant_oem_settings")
-      .upsert(data, { onConflict: "tenant_id" });
+    // A RPC guarda senha e client_secret no Vault e exige admin da empresa.
+    // Campo em branco = "não mexer": a tela não consegue mais ler o segredo
+    // para reenviá-lo, então salvar só a URL não pode apagar a senha.
+    const { error } = await supabase.rpc("salvar_credenciais_oem", {
+      p_tenant_id: data.tenant_id,
+      p_base_url: data.oem_api_base_url ?? undefined,
+      p_username: data.oem_api_username ?? undefined,
+      p_client_id: data.oem_client_id ?? undefined,
+      p_password: data.oem_api_password ?? undefined,
+      p_client_secret: data.oem_client_secret ?? undefined,
+      p_method: data.oem_api_method ?? undefined,
+    });
     if (error) throw new Error(error.message);
     return { ok: true };
   });

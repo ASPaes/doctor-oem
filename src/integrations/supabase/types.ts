@@ -512,32 +512,29 @@ export type Database = {
         Row: {
           oem_api_base_url: string | null
           oem_api_method: string | null
-          oem_api_password: string | null
           oem_api_username: string | null
           oem_client_id: string | null
-          oem_client_secret: string | null
           tenant_id: string
           updated_at: string
+          vault_secret_id: string | null
         }
         Insert: {
           oem_api_base_url?: string | null
           oem_api_method?: string | null
-          oem_api_password?: string | null
           oem_api_username?: string | null
           oem_client_id?: string | null
-          oem_client_secret?: string | null
           tenant_id: string
           updated_at?: string
+          vault_secret_id?: string | null
         }
         Update: {
           oem_api_base_url?: string | null
           oem_api_method?: string | null
-          oem_api_password?: string | null
           oem_api_username?: string | null
           oem_client_id?: string | null
-          oem_client_secret?: string | null
           tenant_id?: string
           updated_at?: string
+          vault_secret_id?: string | null
         }
         Relationships: [
           {
@@ -655,6 +652,19 @@ export type Database = {
       is_tenant_admin: {
         Args: { _tenant_id: string; _user_id: string }
         Returns: boolean
+      }
+      obter_credenciais_oem: { Args: { p_tenant_id: string }; Returns: Json }
+      salvar_credenciais_oem: {
+        Args: {
+          p_base_url?: string
+          p_client_id?: string
+          p_client_secret?: string
+          p_method?: string
+          p_password?: string
+          p_tenant_id: string
+          p_username?: string
+        }
+        Returns: undefined
       }
     }
     Enums: {

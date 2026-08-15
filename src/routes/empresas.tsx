@@ -188,9 +188,9 @@ function OemSettingsDialog({ tenantId, tenantNome }: { tenantId: string; tenantN
       setForm({
         oem_api_base_url: data.oem_api_base_url ?? "https://api.pdvlegal.com.br",
         oem_api_username: data.oem_api_username ?? "",
-        oem_api_password: data.oem_api_password ?? "",
+        oem_api_password: "",
         oem_client_id: data.oem_client_id ?? "",
-        oem_client_secret: data.oem_client_secret ?? "",
+        oem_client_secret: "",
       });
       setLoaded(true);
     }
@@ -209,7 +209,8 @@ function OemSettingsDialog({ tenantId, tenantNome }: { tenantId: string; tenantN
       <DialogContent className="max-w-lg">
         <DialogHeader><DialogTitle>Credenciais OEM — {tenantNome}</DialogTitle></DialogHeader>
         <p className="text-xs text-muted-foreground">
-          Preencha as credenciais OAuth2 da API OEM (TabletCloud / PDV Legal). Elas ficam restritas ao admin desta empresa por RLS.
+          Preencha as credenciais OAuth2 da API OEM (TabletCloud / PDV Legal). Senha e Client Secret ficam
+          no cofre do Supabase e não voltam para a tela — deixe em branco para manter os atuais.
         </p>
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Carregando…</p>
