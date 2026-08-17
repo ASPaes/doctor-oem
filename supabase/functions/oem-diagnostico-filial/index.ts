@@ -170,7 +170,7 @@ Deno.serve(async (req) => {
     // Quanto o portal do OEM mostra para esta filial. Opcional: serve só para
     // o resumo dizer quanto falta e onde esse número aparece nos payloads.
     const esperado = Number(corpo.esperado ?? 0) || null;
-    if (!empresa || !filial) {
+    if (corpo.comparar !== true && (!empresa || !filial)) {
       return Response.json(
         { ok: false, mensagem: "Informe empresa e filial no corpo: {\"empresa\":\"11058\",\"filial\":\"13250\"}" },
         { status: 400, headers: cors },
@@ -179,6 +179,108 @@ Deno.serve(async (req) => {
 
     const creds = await carregarCreds(db, tenantId);
     const tokenTc = await obterToken(LEITURA_BASE, creds);
+
+    // ---------------------------------------------------------------- comparar
+    //
+    // Modo de conferência da BASE INTEIRA: o relatório de faturamento contra o
+    // custo que a carga gravou. Uma chamada só ao OEM cobre todas as filiais —
+    // é o mesmo dado, na escala em que a decisão precisa ser tomada.
+    if (corpo.comparar === true) {
+      const agoraC = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+      const mesC = Number(corpo.mes ?? 0) || agoraC.getMonth() + 1;
+      const anoC = Number(corpo.ano ?? 0) || agoraC.getFullYear();
+      const rel = await espiar(tokenTc, `${LEITURA_BASE}/licenciamento/relatorioMensal/${mesC}/${anoC}/true`);
+      const corpoRel = (rel.corpo ?? {}) as Record<string, unknown>;
+
+      const faturado = new Map<string, { nome: string; valor: number }>();
+      for (const oem of (Array.isArray(corpoRel.oems) ? corpoRel.oems : []) as Record<string, unknown>[]) {
+        for (const emp of (Array.isArray(oem.empresas) ? oem.empresas : []) as Record<string, unknown>[]) {
+          for (const f of (Array.isArray(emp.filiais) ? emp.filiais : []) as Record<string, unknown>[]) {
+            faturado.set(String(f.codigo), {
+              nome: String(f.nome ?? ""),
+              valor: Number(f.valorTotal ?? 0) || 0,
+            });
+          }
+        }
+      }
+
+      const gravado: { filial_codigo: string; custo_total: number | null; status: string | null }[] = [];
+      for (let de = 0; de < 100_000; de += 1000) {
+        const { data, error } = await db
+          .from("clientes_oem")
+          .select("filial_codigo, custo_total, status")
+          .eq("tenant_id", tenantId)
+          .order("id")
+          .range(de, de + 999);
+        if (error) throw new Error(`clientes_oem: ${error.message}`);
+        const lote = data ?? [];
+        gravado.push(...(lote as typeof gravado));
+        if (lote.length < 1000) break;
+      }
+
+      let somaFaturada = 0;
+      let somaGravadaDosFaturados = 0;
+      const divergentes: Record<string, unknown>[] = [];
+      let iguais = 0;
+      let semFaturamento = 0;
+      // A conta que decide é a das ATIVAS: filial desativada hoje pode ter sido
+      // faturada em julho por estar viva naquele mês, e essa diferença é do
+      // calendário, não do dado. Misturar as duas infla o buraco.
+      const ativas = { faturado: 0, gravado: 0, divergentes: 0, aMenos: 0, aMais: 0 };
+      for (const g of gravado) {
+        const f = faturado.get(String(g.filial_codigo));
+        if (!f) {
+          if (g.status === "Ativo") semFaturamento++;
+          continue;
+        }
+        const gravadoV = Number(g.custo_total ?? 0) || 0;
+        somaFaturada += f.valor;
+        somaGravadaDosFaturados += gravadoV;
+        if (g.status === "Ativo") {
+          ativas.faturado += f.valor;
+          ativas.gravado += gravadoV;
+          if (Math.abs(f.valor - gravadoV) >= 0.01) {
+            ativas.divergentes++;
+            if (f.valor > gravadoV) ativas.aMenos++; else ativas.aMais++;
+          }
+        }
+        if (Math.abs(f.valor - gravadoV) >= 0.01) {
+          divergentes.push({
+            filial: g.filial_codigo, nome: f.nome, status: g.status,
+            gravado: gravadoV, faturado: f.valor,
+            diferenca: Math.round((f.valor - gravadoV) * 100) / 100,
+          });
+        } else iguais++;
+      }
+      divergentes.sort((a, b) => Math.abs(Number(b.diferenca)) - Math.abs(Number(a.diferenca)));
+
+      return Response.json({
+        ok: true,
+        competencia: `${String(mesC).padStart(2, "0")}/${anoC}`,
+        duracaoMs: Date.now() - inicio,
+        resumo: {
+          filiaisNoRelatorio: faturado.size,
+          filiaisNoEspelho: gravado.length,
+          casadas: iguais + divergentes.length,
+          iguais,
+          divergentes: divergentes.length,
+          ativasSemFaturamento: semFaturamento,
+          somaFaturada: Math.round(somaFaturada * 100) / 100,
+          somaGravada: Math.round(somaGravadaDosFaturados * 100) / 100,
+          diferencaTotal: Math.round((somaFaturada - somaGravadaDosFaturados) * 100) / 100,
+        },
+        somenteAtivas: {
+          faturado: Math.round(ativas.faturado * 100) / 100,
+          gravado: Math.round(ativas.gravado * 100) / 100,
+          diferenca: Math.round((ativas.faturado - ativas.gravado) * 100) / 100,
+          divergentes: ativas.divergentes,
+          gravadoAMenos: ativas.aMenos,
+          gravadoAMais: ativas.aMais,
+        },
+        maioresDivergencias: divergentes.slice(0, 25),
+      }, { headers: cors });
+    }
+
     const tokenPl = await obterToken(creds.baseUrl, creds);
 
     // 1. Catálogo de produtos: é o que permite perguntar por TODOS eles.
@@ -215,6 +317,45 @@ Deno.serve(async (req) => {
     //    resto fora — se o valor que falta existir, é o candidato número um.
     const detalhePl = await espiar(tokenPl, `${creds.baseUrl}/v1/licenciamento/${empresa}/${filial}`);
 
+    // 3b. O RELATÓRIO DE FATURAMENTO — o que é cobrado de fato no mês.
+    //
+    // É outra pergunta, e é a que interessa: `/minhaslicencas/modulos` devolve
+    // a licença CONFIGURADA (e devolveu 0,00 no módulo que o portal cobra),
+    // enquanto este devolve o que entra na fatura. Módulo de consumo (Delivery
+    // Legal) só tem valor aqui, porque só existe depois de faturado.
+    //
+    // `comDetalhesDeCadaFilial=true` é a consulta pesada — desce a base
+    // inteira. Vale a pena: é uma chamada por mês, não uma por filial.
+    const agora = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }),
+    );
+    const mes = Number(corpo.mes ?? 0) || agora.getMonth() + 1;
+    const ano = Number(corpo.ano ?? 0) || agora.getFullYear();
+    const relatorio = await espiar(
+      tokenTc,
+      `${LEITURA_BASE}/licenciamento/relatorioMensal/${mes}/${ano}/true`,
+    );
+
+    // Do relatório inteiro só interessa esta filial: devolver a base toda
+    // estouraria a resposta e não ajudaria ninguém a ler.
+    let faturamentoDaFilial: Record<string, unknown> | null = null;
+    let empresaDaFilial: Record<string, unknown> | null = null;
+    const rel = (relatorio.corpo ?? {}) as Record<string, unknown>;
+    for (const oem of (Array.isArray(rel.oems) ? rel.oems : []) as Record<string, unknown>[]) {
+      for (const emp of (Array.isArray(oem.empresas) ? oem.empresas : []) as Record<string, unknown>[]) {
+        for (const f of (Array.isArray(emp.filiais) ? emp.filiais : []) as Record<string, unknown>[]) {
+          if (String(f.codigo) === filial) {
+            faturamentoDaFilial = f;
+            empresaDaFilial = {
+              codigo: emp.codigo, nome: emp.nome, cnpj: emp.cnpj,
+              codProduto: emp.codProduto, nomeProduto: emp.nomeProduto,
+              valorTotal: emp.valorTotal,
+            };
+          }
+        }
+      }
+    }
+
     // 4. Onde cada número aparece. Com `esperado`, aponta direto quem fecha a
     //    diferença em vez de deixar a leitura no olho.
     const somaTc = modulosPorProduto.reduce(
@@ -234,6 +375,8 @@ Deno.serve(async (req) => {
       resumo: {
         produtosConsultados: produtos.length,
         somaDeclaradaPelaApiDeCustos: somaTc,
+        faturamentoDoMes: faturamentoDaFilial?.valorTotal ?? null,
+        competencia: `${String(mes).padStart(2, "0")}/${ano}`,
         portalInformou: esperado,
         faltando,
         ondeEstaOQueFalta,
@@ -250,6 +393,17 @@ Deno.serve(async (req) => {
       catalogoProdutos: catalogo,
       modulosPorProduto,
       detalhePdvLegal: detalhePl,
+      faturamento: {
+        http: relatorio.http,
+        competencia: `${String(mes).padStart(2, "0")}/${ano}`,
+        totaisDoOem: {
+          valorTotalGeral: rel.valorTotalGeral ?? null,
+          valorGeralLicenciamentos: rel.valorGeralLicenciamentos ?? null,
+          valorGeralUsoPlataforma: rel.valorGeralUsoPlataforma ?? null,
+        },
+        empresa: empresaDaFilial,
+        filial: faturamentoDaFilial,
+      },
     }, { headers: cors });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
