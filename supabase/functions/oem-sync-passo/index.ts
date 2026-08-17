@@ -13,8 +13,13 @@
 //
 //   Enumeração grupo+filiais | TC  /licenciamento/minhaslicencas/{pagina}/
 //   Ativo / Desativado       | TC  filiais[].ativo   (equivale ao AT/IN)
-//   Custo e módulos          | TC  /licenciamento/minhaslicencas/modulos/...
+//   Lista de módulos         | TC  /licenciamento/minhaslicencas/modulos/...
+//   CUSTO                    | TC  /licenciamento/relatorioMensal/{mes}/{ano}/true
 //   Bloqueado                | PL  /v1/licenciamento/{emp}/{fil} .bloqueado
+//
+// O custo saiu do `modulos` e foi para o `relatorioMensal` em 17/08/2026: o
+// primeiro é a licença CONFIGURADA e não precifica módulo de consumo, o
+// segundo é o que entra na fatura. Ver o bloco "custo = faturamento" abaixo.
 //
 // NÃO usar a listagem nem o modulos[] do pdvlegal: o `ativo` dela é
 // inconsistente e a lista de módulos vem incompleta (2 de 5 na PARRILLA GOLD).
@@ -230,6 +235,138 @@ async function buscarModulos(h: Holder, prod: string, grupo: number, filial: num
   };
 }
 
+// ------------------------------------------------------- custo = faturamento
+//
+// O `/minhaslicencas/modulos` descreve a licença CONFIGURADA, e módulo de
+// consumo só ganha valor depois de faturado: na filial 13250 ele devolvia o
+// "Delivery Legal" (módulo 31) valendo 0,00 enquanto o portal cobrava R$ 44,00,
+// e o `valorTotal` dele saía R$ 213,88 contra R$ 257,88 na fatura. Medido em
+// julho/2026 na base inteira: das 850 filiais faturadas, 100 divergiam — 38
+// gravadas a menos e 62 a mais. No total quase empatava (R$ 83,88), mas o
+// custo POR CLIENTE estava errado nos dois sentidos, até R$ 125,46 numa filial.
+//
+// O relatório mensal é a fonte do que é cobrado, e é UMA chamada para a base
+// inteira (~2s) — não uma por filial.
+type ModuloFaturado = { valor: number; quantidade: number; nome: string };
+type FilialFaturada = { valorTotal: number; modulos: Map<number, ModuloFaturado> };
+type Faturamento = { competencia: string; filiais: Map<string, FilialFaturada> };
+
+// Cache por instância: o passo roda a cada 3 min e a competência não muda no
+// meio do mês. Sem isto seriam ~43 chamadas do relatório por carga completa.
+const TTL_FATURAMENTO_MS = 30 * 60_000;
+const cacheFaturamento = new Map<string, { em: number; dados: Faturamento }>();
+
+async function lerRelatorio(h: Holder, mes: number, ano: number): Promise<Faturamento | null> {
+  const alvo = `relatório de faturamento ${mes}/${ano}`;
+  const r = await oemGet(h, `${LEITURA_BASE}/licenciamento/relatorioMensal/${mes}/${ano}/true`, alvo);
+  if (!r.ok) throw new Error(`Relatório de faturamento HTTP ${r.status} em ${alvo}.`);
+  const raw = await r.json().catch(() => null);
+  if (!raw) throw new Error(`Relatório de faturamento veio vazio em ${alvo}.`);
+
+  const filiais = new Map<string, FilialFaturada>();
+  for (const oem of (Array.isArray(raw.oems) ? raw.oems : []) as Record<string, any>[]) {
+    for (const emp of (Array.isArray(oem.empresas) ? oem.empresas : []) as Record<string, any>[]) {
+      for (const f of (Array.isArray(emp.filiais) ? emp.filiais : []) as Record<string, any>[]) {
+        const modulos = new Map<number, ModuloFaturado>();
+        for (const m of (Array.isArray(f.modulos) ? f.modulos : []) as Record<string, any>[]) {
+          const cod = Number(m.codigo);
+          if (!Number.isFinite(cod)) continue;
+          modulos.set(cod, {
+            valor: Number(m.valor ?? 0) || 0,
+            quantidade: Number(m.quantidade ?? 0) || 0,
+            nome: String(m.nome ?? ""),
+          });
+        }
+        filiais.set(String(f.codigo), {
+          valorTotal: Number(f.valorTotal ?? 0) || 0,
+          modulos,
+        });
+      }
+    }
+  }
+  // Competência ainda não fechada devolve HTTP 200 com tudo zerado — isso não
+  // é "custo zero", é "ainda não faturado", e tratar como dado apagaria o
+  // custo de 850 filiais todo dia 1º.
+  return filiais.size ? { competencia: `${String(mes).padStart(2, "0")}/${ano}`, filiais } : null;
+}
+
+/** Faturamento da competência mais recente que já fechou. */
+async function buscarFaturamento(h: Holder, tenantId: string): Promise<Faturamento | null> {
+  const emCache = cacheFaturamento.get(tenantId);
+  if (emCache && Date.now() - emCache.em < TTL_FATURAMENTO_MS) return emCache.dados;
+
+  const agora = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  let mes = agora.getMonth() + 1;
+  let ano = agora.getFullYear();
+  let dados = await lerRelatorio(h, mes, ano);
+  if (!dados) {
+    // Mês corrente ainda aberto: vale o anterior, que é o último fechado.
+    mes -= 1;
+    if (mes === 0) { mes = 12; ano -= 1; }
+    dados = await lerRelatorio(h, mes, ano);
+  }
+  if (dados) cacheFaturamento.set(tenantId, { em: Date.now(), dados });
+  return dados;
+}
+
+/**
+ * Aplica o que foi faturado sobre a licença configurada.
+ *
+ * Devolve o custo e a lista de módulos já com os valores da fatura. Módulo
+ * faturado que não existe na licença configurada é ACRESCENTADO — sem isso a
+ * soma dos módulos deixaria de bater com o total, e é essa soma que a ficha do
+ * cliente no DoctorSaaS mostra.
+ */
+function aplicarFaturamento(
+  modulos: Record<string, unknown>[],
+  fat: FilialFaturada,
+): { custo: number; modulos: Record<string, unknown>[] } {
+  const vistos = new Set<number>();
+  const saida = modulos.map((m) => {
+    const cod = Number(m.codigo);
+    const f = Number.isFinite(cod) ? fat.modulos.get(cod) : undefined;
+    if (!f) return m;
+    vistos.add(cod);
+    const qtd = f.quantidade || Number(m.quantidade ?? 0) || 0;
+    const unit = qtd > 0 ? Math.round((f.valor / qtd) * 100) / 100 : f.valor;
+    return {
+      ...m,
+      quantidade: qtd,
+      valorUnitario: unit,
+      valor_unitario: unit,
+      total: f.valor,
+      valorTotal: f.valor,
+      valor_total: f.valor,
+      valor: f.valor,
+      descricao: `Qtde ${qtd} × R$ ${unit.toFixed(2)} (unitário)`,
+    };
+  });
+
+  for (const [cod, f] of fat.modulos) {
+    if (vistos.has(cod) || f.valor <= 0) continue;
+    const unit = f.quantidade > 0 ? Math.round((f.valor / f.quantidade) * 100) / 100 : f.valor;
+    saida.push({
+      codigo: cod,
+      id: String(cod),
+      nome: f.nome || `Módulo ${cod}`,
+      ativo: true,
+      status: "Ativo",
+      quantidade: f.quantidade,
+      valorUnitario: unit,
+      valor_unitario: unit,
+      total: f.valor,
+      valorTotal: f.valor,
+      valor_total: f.valor,
+      valor: f.valor,
+      descricao: `Qtde ${f.quantidade} × R$ ${unit.toFixed(2)} (unitário)`,
+      // Não veio da licença configurada: só existe porque foi cobrado.
+      somenteFaturado: true,
+    });
+  }
+
+  return { custo: fat.valorTotal, modulos: saida };
+}
+
 async function buscarBloqueio(creds: Creds, h: Holder, grupo: number, filial: number) {
   const alvo = `licença ${grupo}/${filial}`;
   const r = await oemGet(h, `${creds.baseUrl}/v1/licenciamento/${grupo}/${filial}`, alvo);
@@ -384,7 +521,7 @@ async function passoListagem(db: SupabaseClient, tenantId: string, run: RunRow, 
 
 async function montarLinha(
   tenantId: string, item: FilaRow, produtos: Record<string, string>,
-  creds: Creds, tc: Holder, pl: Holder,
+  creds: Creds, tc: Holder, pl: Holder, faturamento: Faturamento | null,
 ): Promise<Record<string, unknown>> {
   const codGrupo = Number(item.empresa_codigo);
   const codFilial = Number(item.filial_codigo);
@@ -399,8 +536,16 @@ async function montarLinha(
     throw new Error(`Produto "${item.produto ?? "(vazio)"}" não está no catálogo do OEM.`);
   }
 
-  const { valorTotal, modulos } = await buscarModulos(tc, codProduto, codGrupo, codFilial);
+  const { valorTotal, modulos: modulosConfig } = await buscarModulos(tc, codProduto, codGrupo, codFilial);
   const licenca = await buscarBloqueio(creds, pl, codGrupo, codFilial);
+
+  // Faturado manda no custo. Filial que não está no relatório (desativada, ou
+  // ativada depois do fechamento) continua com o valor da licença configurada:
+  // não existe fatura dela para contradizer, e zerar seria pior.
+  const fat = faturamento?.filiais.get(String(codFilial)) ?? null;
+  const aplicado = fat ? aplicarFaturamento(modulosConfig, fat) : null;
+  const modulos = aplicado?.modulos ?? modulosConfig;
+  const custo = aplicado ? aplicado.custo : (valorTotal ?? 0);
 
   const qtdDe = (re: RegExp): number | null => {
     for (const m of modulos) {
@@ -428,7 +573,7 @@ async function montarLinha(
     status: resumo.ativo ? "Ativo" : "Desativado",
     bloqueado: licenca.bloqueado,
     motivo_bloqueio: licenca.bloqueado ? "Bloqueado no OEM" : null,
-    custo_total: valorTotal ?? 0,
+    custo_total: custo,
     modulos_ativos: modulos,
     qtd_pdv: qtdPdv,
     qtd_pdv_comandas: qtdPdv,
@@ -456,6 +601,18 @@ async function passoDetalhe(
     await salvarRun(db, run.id, { produtos });
   }
 
+  // Uma leitura para o lote inteiro (e, pelo cache, para a carga inteira).
+  // Falhar aqui NÃO derruba o passo: sem o relatório, o custo continua o da
+  // licença configurada, que é o comportamento antigo — degradado, mas não
+  // vazio, e o motivo fica no log.
+  let faturamento: Faturamento | null = null;
+  try {
+    faturamento = await buscarFaturamento(tc, tenantId);
+    if (!faturamento) console.warn("[oem-sync] nenhuma competência fechada no relatório de faturamento.");
+  } catch (e) {
+    console.error("[oem-sync] relatório de faturamento:", e instanceof Error ? e.message : String(e));
+  }
+
   const { data: jaExistem } = await db
     .from("clientes_oem").select("filial_codigo")
     .eq("tenant_id", tenantId).in("filial_codigo", lote.map((i) => i.filial_codigo));
@@ -477,7 +634,7 @@ async function passoDetalhe(
     const chunk = lote.slice(i, i + paralelo);
     const res = await Promise.all(chunk.map(async (item) => {
       try {
-        return { item, linha: await montarLinha(tenantId, item, produtos!, creds, tc, pl) };
+        return { item, linha: await montarLinha(tenantId, item, produtos!, creds, tc, pl, faturamento) };
       } catch (e) {
         // 429 mantém a linha PENDENTE — não é falha do cliente.
         if (e instanceof RateLimitOem) return { item, barrado: e.message };
