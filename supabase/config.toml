@@ -19,3 +19,9 @@ verify_jwt = true
 # sistema. Por isso verify_jwt = false: a chave E a autenticacao.
 [functions.oem-exportar]
 verify_jwt = false
+
+# Diagnostico de UMA filial: devolve as respostas cruas das duas APIs do OEM.
+# Leitura pura, nao escreve em lugar nenhum. Mesma autenticacao da exportar
+# (x-api-key), pelo mesmo motivo: quem chama e outro sistema.
+[functions.oem-diagnostico-filial]
+verify_jwt = false
