@@ -211,6 +211,24 @@ Deno.serve(async (req) => {
       return { codigo: cod, ativo: false, quantidade: 0, valorUnitario: unit, valorTotal: 0 };
     });
 
+    // Módulo que ainda não está na licença só entra se vier valor: sem preço,
+    // ele seria acrescentado valendo zero e o parceiro deixaria de cobrar algo
+    // que o cliente passou a usar.
+    if (!achou && novaQtd > 0) {
+      const unit = num(corpo.valor_unitario);
+      if (unit === undefined) {
+        return Response.json({
+          ok: false, etapa: "modulo",
+          mensagem: `O módulo ${moduloCodigo} não está na licença ${empresa}/${filial}. Para acrescentá-lo, informe valor_unitario.`,
+        }, { status: 400, headers: cors });
+      }
+      (payload.modulos as unknown[]).push({
+        codigo: moduloCodigo, ativo: true, quantidade: novaQtd,
+        valorUnitario: unit, valorTotal: Math.round(unit * novaQtd * 100) / 100,
+      });
+      achou = true;
+    }
+
     if (!achou) {
       return Response.json({
         ok: false, etapa: "modulo",
