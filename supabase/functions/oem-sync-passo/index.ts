@@ -544,7 +544,15 @@ async function montarLinha(
   // não existe fatura dela para contradizer, e zerar seria pior.
   const fat = faturamento?.filiais.get(String(codFilial)) ?? null;
   const aplicado = fat ? aplicarFaturamento(modulosConfig, fat) : null;
-  const modulos = aplicado?.modulos ?? modulosConfig;
+  // "Desconto" valendo zero não é informação — é uma linha vazia que chega ao
+  // DoctorSaaS e aparece na ficha do cliente como se fosse mais um módulo da
+  // licença. A regra vale SÓ para o desconto: módulo de verdade valendo 0
+  // (Usuário Cloud, Mesa/Ficha) continua, porque ele está na licença mesmo sem
+  // cobrar, e sumir com ele esconderia o que o cliente tem contratado.
+  const modulos = (aplicado?.modulos ?? modulosConfig).filter((m) => {
+    if (!/desconto/i.test(String(m.nome ?? ""))) return true;
+    return Number(m.valor_total ?? m.total ?? m.valor ?? 0) !== 0;
+  });
   const custo = aplicado ? aplicado.custo : (valorTotal ?? 0);
 
   const qtdDe = (re: RegExp): number | null => {
