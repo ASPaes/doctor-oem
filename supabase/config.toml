@@ -25,3 +25,10 @@ verify_jwt = false
 # (x-api-key), pelo mesmo motivo: quem chama e outro sistema.
 [functions.oem-diagnostico-filial]
 verify_jwt = false
+
+# Baixa de modulo numa licenca. Escreve no OEM (le a filial, troca o modulo e
+# grava de volta), com guarda: nao envia nada se a leitura nao trouxer os
+# campos obrigatorios. Mesma autenticacao por x-api-key das outras — quem
+# chama e o DoctorSaaS, nao uma pessoa logada aqui.
+[functions.oem-licenca-modulo]
+verify_jwt = false
