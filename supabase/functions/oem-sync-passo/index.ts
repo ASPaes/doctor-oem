@@ -321,25 +321,27 @@ function aplicarFaturamento(
   modulos: Record<string, unknown>[],
   fat: FilialFaturada,
 ): { custo: number; modulos: Record<string, unknown>[] } {
+  // 19/08/2026 — MÓDULO QUE ESTÁ NA LICENÇA MANDA NO PRÓPRIO PREÇO.
+  //
+  // Antes, o valor da fatura sobrescrevia o da licença e o unitário era
+  // reconstruído por divisão. Isso inventava preço: na filial 14709 (ESPETINHO
+  // DO TILIAS) a fatura cobrou 8 PDVs (R$ 100,72), o código dividiu pelos 9
+  // configurados e gravou R$ 11,19 de unitário — número que não existe nem na
+  // fatura nem no portal, que mostra 9 × R$ 12,59. O mesmo mecanismo trocava a
+  // quantidade: Usuário Cloud aparecia 2 aqui e 1 lá.
+  //
+  // Fatura de mês fechado é o que JÁ foi cobrado, e pode diferir por rateio de
+  // meio de mês ou preço antigo. O que a ficha do cliente mostra é o que vale
+  // agora — e tem que bater linha a linha com o portal.
+  //
+  // O acerto de 17/08 continua de pé, porque a razão dele era outra: módulo de
+  // CONSUMO não existe na licença configurada e só aparece depois de faturado.
+  // Esse continua sendo acrescentado logo abaixo.
   const vistos = new Set<number>();
   const saida = modulos.map((m) => {
     const cod = Number(m.codigo);
-    const f = Number.isFinite(cod) ? fat.modulos.get(cod) : undefined;
-    if (!f) return m;
-    vistos.add(cod);
-    const qtd = f.quantidade || Number(m.quantidade ?? 0) || 0;
-    const unit = qtd > 0 ? Math.round((f.valor / qtd) * 100) / 100 : f.valor;
-    return {
-      ...m,
-      quantidade: qtd,
-      valorUnitario: unit,
-      valor_unitario: unit,
-      total: f.valor,
-      valorTotal: f.valor,
-      valor_total: f.valor,
-      valor: f.valor,
-      descricao: `Qtde ${qtd} × R$ ${unit.toFixed(2)} (unitário)`,
-    };
+    if (Number.isFinite(cod) && fat.modulos.has(cod)) vistos.add(cod);
+    return m;
   });
 
   for (const [cod, f] of fat.modulos) {
@@ -364,7 +366,17 @@ function aplicarFaturamento(
     });
   }
 
-  return { custo: fat.valorTotal, modulos: saida };
+  // O custo é a SOMA DAS LINHAS ativas, não o total da fatura. Quem abre a
+  // ficha confere somando o que vê; um total que não fecha com as linhas é
+  // lido como erro, mesmo quando é o valor certo de outro mês. Módulo inativo
+  // fica de fora, igual ao portal.
+  const custo = saida.reduce((acc, m) => {
+    if (m.ativo === false) return acc;
+    const v = Number(m.valorTotal ?? m.valor_total ?? m.valor ?? 0) || 0;
+    return acc + v;
+  }, 0);
+
+  return { custo: Math.round(custo * 100) / 100, modulos: saida };
 }
 
 async function buscarBloqueio(creds: Creds, h: Holder, grupo: number, filial: number) {
@@ -553,7 +565,14 @@ async function montarLinha(
     if (!/desconto/i.test(String(m.nome ?? ""))) return true;
     return Number(m.valor_total ?? m.total ?? m.valor ?? 0) !== 0;
   });
-  const custo = aplicado ? aplicado.custo : (valorTotal ?? 0);
+  // Sem fatura (filial fora do relatório), o custo também é a soma das linhas
+  // ativas — e não o `valorTotal` que o endpoint de módulos declara, que é o
+  // total da FILIAL e vem igual para todos os produtos do catálogo.
+  const somaLinhas = modulos.reduce((acc, m) => {
+    if (m.ativo === false) return acc;
+    return acc + (Number(m.valor_total ?? m.valorTotal ?? m.valor ?? 0) || 0);
+  }, 0);
+  const custo = aplicado ? aplicado.custo : Math.round(somaLinhas * 100) / 100;
 
   const qtdDe = (re: RegExp): number | null => {
     for (const m of modulos) {
