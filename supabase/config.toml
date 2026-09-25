@@ -32,3 +32,9 @@ verify_jwt = false
 # chama e o DoctorSaaS, nao uma pessoa logada aqui.
 [functions.oem-licenca-modulo]
 verify_jwt = false
+
+# Cria licenca NOVA no OEM (grupo avulso ou filial em grupo existente).
+# Acoes listas/buscar sao leitura; criar com simular=true nao envia nada.
+# Mesma autenticacao por x-api-key das irmas: quem chama e o DoctorSaaS.
+[functions.oem-licenca-criar]
+verify_jwt = false
