@@ -228,7 +228,6 @@ Deno.serve(async (req) => {
       if (modo === "grupo" && grupo == null) faltando.push("grupo_codigo");
       // Grupo existente: o nome é como a listagem o acha. Avulsa: vira o nome do grupo novo.
       const nomeGrupo = String(corpo.nome_grupo ?? (modo === "avulsa" ? nomeLoja : "")).trim();
-      if (!nomeGrupo) faltando.push("nome_grupo");
       const email = String(corpo.email ?? "").trim();
       if (modo === "avulsa" && !email) faltando.push("email");
       if (faltando.length) {
@@ -274,12 +273,13 @@ Deno.serve(async (req) => {
       const payloadGrupo = modo === "avulsa"
         ? { nome: nomeGrupo, codproduto: produto, cpF_CNPJ: cnpjLoja, email }
         : null;
-      const montarFilial = (codGrupo: number | null) => ({
+      const montarFilial = (codGrupo: number | null, nomeGrupoOem?: string) => ({
         codloja: 0,
         nomeloja: nomeLoja,
         cnpJloja: cnpjLoja,
         codgrupoeconomico: codGrupo ?? 0,
-        nomegrupo: nomeGrupo,
+        // O nome como o OEM guarda vence o que o DoctorSaaS mandou.
+        nomegrupo: nomeGrupoOem || nomeGrupo,
         codproduto: produto,
         nomeproduto: nomeProduto,
         valorTotal: Math.round(modulos.reduce((s, m) => s + m.valorTotal, 0) * 100) / 100,
@@ -295,13 +295,35 @@ Deno.serve(async (req) => {
         pdvComandas: qtdDe(10),
       });
 
-      // A listagem só traz o CNPJ do GRUPO (a filial não tem esse campo). Então
-      // filial dentro de grupo existente se acha pelo nome do grupo; grupo novo,
-      // pelo CNPJ, que é o que ele vai carregar.
-      const filtroBusca = modo === "grupo" ? nomeGrupo : cnpjLoja;
+      // Filial em grupo existente se acha pelo CÓDIGO do grupo; grupo novo, pelo
+      // CNPJ que ele vai carregar. Nome NÃO serve: medido em 25/09, o nome
+      // completo "CAMPINA VERDE COM. DE RACOES LTDA ME" volta 404, enquanto
+      // "4517" e o CNPJ acham o grupo.
+      const filtroBusca = modo === "grupo" ? String(grupo) : cnpjLoja;
 
-      // Foto de ANTES: é contra ela que se descobre o que nasceu.
+      // Foto de ANTES: é contra ela que se descobre o que nasceu. Foto vazia por
+      // falha de busca faria a filial ANTIGA parecer nova — então, no grupo
+      // existente, o grupo tem que aparecer nela.
       const antes = await listar(token, filtroBusca);
+      if (modo === "grupo") {
+        const doGrupo = antes.licencas.filter((l) => l.grupo === grupo);
+        if (!antes.chamada.ok || doGrupo.length === 0) {
+          return Response.json({
+            ok: false, etapa: "busca_antes",
+            mensagem: `Não achei o grupo ${grupo} na listagem do OEM. Nada foi criado.`,
+            busca_antes: antes.chamada,
+          }, { status: 409, headers: cors });
+        }
+      } else if (!antes.chamada.ok && antes.chamada.http !== 404) {
+        // Avulsa: 404 é "nenhuma licença com este CNPJ", que é o esperado.
+        return Response.json({
+          ok: false, etapa: "busca_antes",
+          mensagem: "A listagem do OEM falhou antes de criar. Nada foi criado.",
+          busca_antes: antes.chamada,
+        }, { status: 502, headers: cors });
+      }
+
+      const nomeGrupoOem = antes.licencas.find((l) => l.grupo === grupo)?.nomegrupo;
 
       // Duplo clique, ou reenvio depois de um erro que na verdade gravou:
       // mesma loja no mesmo grupo já listada = não cria outra.
@@ -320,7 +342,7 @@ Deno.serve(async (req) => {
         return Response.json({
           ok: true, simulado: true,
           payload_grupo: payloadGrupo,
-          payload_filial: montarFilial(grupo),
+          payload_filial: montarFilial(grupo, nomeGrupoOem),
           filtro_da_busca: filtroBusca,
           listadas_antes: antes.licencas,
           busca_antes: { http: antes.chamada.http, ok: antes.chamada.ok },
@@ -358,7 +380,7 @@ Deno.serve(async (req) => {
       }
 
       // ---- filial
-      const payloadFilial = montarFilial(grupo);
+      const payloadFilial = montarFilial(grupo, nomeGrupoOem);
       const respostaFilial = await chamar(token, `${LEITURA_BASE}/licenciamento/minhaslicencas/saveFilial`, payloadFilial);
       if (!respostaFilial.ok) {
         return Response.json({
