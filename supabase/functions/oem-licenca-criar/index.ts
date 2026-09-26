@@ -135,6 +135,32 @@ function achatar(corpo: unknown): LicencaListada[] {
   return out;
 }
 
+/**
+ * Grupo e loja que o OEM devolve ao salvar. Medido em 26/09/2026: as duas rotas
+ * respondem `{CodigoGrupoEconomico, CodigoFilial, ...}` com 201.
+ */
+function codigosDaResposta(corpo: unknown): { grupo: number | null; filial: number | null } {
+  const r = (corpo ?? {}) as Record<string, unknown>;
+  return {
+    grupo: inteiro(r.CodigoGrupoEconomico ?? r.codigoGrupoEconomico ?? r.codgrupo),
+    filial: inteiro(r.CodigoFilial ?? r.codigoFilial ?? r.codfilial),
+  };
+}
+
+/**
+ * A resposta de criação traz a SENHA do usuário master e o token de webservice
+ * da licença. Nada disso sai daqui: a resposta vai para a fila do DoctorSaaS,
+ * que outras pessoas leem.
+ */
+function semSegredos(c: Chamada | null): Chamada | null {
+  if (!c || !c.corpo || typeof c.corpo !== "object") return c;
+  const corpo = { ...(c.corpo as Record<string, unknown>) };
+  for (const k of Object.keys(corpo)) {
+    if (/senha|password|token/i.test(k)) corpo[k] = "[removido]";
+  }
+  return { ...c, corpo };
+}
+
 async function listar(token: string, filtro: string) {
   const r = await chamar(token, `${LEITURA_BASE}/licenciamento/minhaslicencas/0/${encodeURIComponent(filtro)}`);
   return { chamada: r, licencas: r.ok ? achatar(r.corpo) : [] };
@@ -273,8 +299,9 @@ Deno.serve(async (req) => {
       const payloadGrupo = modo === "avulsa"
         ? { nome: nomeGrupo, codproduto: produto, cpF_CNPJ: cnpjLoja, email }
         : null;
-      const montarFilial = (codGrupo: number | null, nomeGrupoOem?: string) => ({
-        codloja: 0,
+      // codLoja 0 CRIA uma loja; o código de uma loja existente ATUALIZA ela.
+      const montarFilial = (codGrupo: number | null, nomeGrupoOem?: string, codLoja = 0) => ({
+        codloja: codLoja,
         nomeloja: nomeLoja,
         cnpJloja: cnpjLoja,
         codgrupoeconomico: codGrupo ?? 0,
@@ -341,6 +368,10 @@ Deno.serve(async (req) => {
       if (simular) {
         return Response.json({
           ok: true, simulado: true,
+          passos: modo === "avulsa"
+            ? ["saveGrupoEconomico: cria o grupo e a matriz",
+               "saveFilial com o código da matriz: aplica módulos e códigos de negócio (atualiza, não cria)"]
+            : [`saveFilial com codloja 0: cria UMA loja no grupo ${grupo}`],
           payload_grupo: payloadGrupo,
           payload_filial: montarFilial(grupo, nomeGrupoOem),
           filtro_da_busca: filtroBusca,
@@ -350,66 +381,105 @@ Deno.serve(async (req) => {
         }, { headers: cors });
       }
 
-      // ---- grupo novo (licença avulsa)
+      // ===================================================================
+      // ⚠️ `saveGrupoEconomico` JÁ CRIA A PRIMEIRA LOJA DO GRUPO (a matriz).
+      //
+      // Medido em 26/09/2026 no primeiro teste real (grupo 33430): a resposta
+      // do grupo devolveu `CodigoGrupoEconomico: 33430` E `CodigoFilial: 40570`.
+      // A documentação não diz isso. A primeira versão desta função chamava em
+      // seguida `saveFilial` com `codloja: 0`, que CRIA outra loja — nasceram
+      // duas licenças cobradas (40570 e 40571) para um pedido de licença avulsa.
+      //
+      // Então: avulsa = `saveGrupoEconomico` (grupo + matriz) e depois
+      // `saveFilial` com o código DA MATRIZ, que atualiza em vez de criar.
+      // `codloja: 0` só existe no modo grupo, e uma vez só.
+      // ===================================================================
       let respostaGrupo: Chamada | null = null;
+      let filialAlvo: number | null = null;   // loja a ATUALIZAR (avulsa: a matriz)
+
       if (modo === "avulsa") {
         respostaGrupo = await chamar(token, `${LEITURA_BASE}/licenciamento/minhaslicencas/saveGrupoEconomico`, payloadGrupo);
         if (!respostaGrupo.ok) {
-          return Response.json({ ok: false, etapa: "grupo", mensagem: "O OEM recusou criar o grupo.", resposta_grupo: respostaGrupo },
-            { status: 502, headers: cors });
+          return Response.json({
+            ok: false, etapa: "grupo", mensagem: "O OEM recusou criar o grupo.",
+            resposta_grupo: semSegredos(respostaGrupo),
+          }, { status: 502, headers: cors });
         }
-        // A resposta pode trazer o código ou não. Primeiro ela, depois a listagem.
-        const r = respostaGrupo.corpo as Record<string, unknown> | number | null;
-        grupo = typeof r === "number" ? inteiro(r)
-          : inteiro((r as Record<string, unknown>)?.codgrupo ?? (r as Record<string, unknown>)?.codigo ?? (r as Record<string, unknown>)?.id);
-        if (grupo == null) {
+        const cod = codigosDaResposta(respostaGrupo.corpo);
+        grupo = cod.grupo;
+        filialAlvo = cod.filial;
+
+        // Sem os códigos na resposta, a listagem diz qual grupo nasceu e qual
+        // é a loja dele. Grupo novo tem exatamente uma loja: a matriz.
+        if (grupo == null || filialAlvo == null) {
           const conhecidos = new Set(antes.licencas.map((l) => l.grupo));
           const depoisGrupo = await listar(token, filtroBusca);
-          const novo = depoisGrupo.licencas.find((l) => !conhecidos.has(l.grupo));
-          grupo = novo?.grupo ?? null;
+          const doNovo = depoisGrupo.licencas.filter((l) => !conhecidos.has(l.grupo));
+          if (doNovo.length === 1) {
+            grupo = doNovo[0].grupo;
+            filialAlvo = doNovo[0].filial;
+          }
         }
-        if (grupo == null) {
-          // Grupo criado mas sem código achável: parar aqui é o que evita criar a
-          // filial no grupo errado. O DoctorSaaS mostra a resposta e alguém olha.
+        if (grupo == null || filialAlvo == null) {
+          // Grupo criado sem código achável: parar aqui é o que evita mexer na
+          // loja errada. Nada mais é enviado; gente olha a resposta.
           return Response.json({
             ok: false, etapa: "grupo_sem_codigo",
-            mensagem: "O OEM aceitou o grupo, mas não consegui descobrir o código dele. A filial NÃO foi criada.",
-            resposta_grupo: respostaGrupo,
+            mensagem: "O OEM aceitou o grupo, mas não consegui descobrir o código dele e da matriz. Os módulos NÃO foram aplicados.",
+            resposta_grupo: semSegredos(respostaGrupo),
           }, { status: 502, headers: cors });
         }
       }
 
-      // ---- filial
-      const payloadFilial = montarFilial(grupo, nomeGrupoOem);
+      // ---- módulos e códigos de negócio na loja
+      // Avulsa: ATUALIZA a matriz que o grupo criou. Grupo existente: CRIA uma loja.
+      const payloadFilial = montarFilial(grupo, nomeGrupoOem, filialAlvo ?? 0);
       const respostaFilial = await chamar(token, `${LEITURA_BASE}/licenciamento/minhaslicencas/saveFilial`, payloadFilial);
       if (!respostaFilial.ok) {
         return Response.json({
-          ok: false, etapa: "filial", grupo_codigo: grupo,
-          mensagem: "O OEM recusou criar a filial.",
-          resposta_grupo: respostaGrupo, resposta_filial: respostaFilial, payload_filial: payloadFilial,
+          ok: false, etapa: "filial", grupo_codigo: grupo, filial_codigo: filialAlvo,
+          mensagem: filialAlvo
+            ? `O grupo e a matriz foram criados (${grupo}/${filialAlvo}), mas o OEM recusou aplicar os módulos.`
+            : "O OEM recusou criar a filial.",
+          resposta_grupo: semSegredos(respostaGrupo), resposta_filial: semSegredos(respostaFilial),
+          payload_filial: payloadFilial,
         }, { status: 502, headers: cors });
       }
 
-      // Foto de DEPOIS. A listagem atrasa às vezes: três tentativas.
+      const codFilial = codigosDaResposta(respostaFilial.corpo);
+      // Na atualização o código tem que voltar IGUAL ao da matriz. Diferente
+      // quer dizer que o OEM criou outra loja em vez de atualizar.
+      const filialFinal = filialAlvo ?? codFilial.filial;
+
+      // ---- conferência: quantas lojas nasceram de verdade
+      // Avulsa: o grupo tem que ter UMA loja. Grupo existente: uma a mais do que
+      // antes. Qualquer outro número é licença sobrando e cobrando, e vai como
+      // `alerta` para o DoctorSaaS mostrar.
       const conhecidas = new Set(antes.licencas.map((l) => `${l.grupo}/${l.filial}`));
-      let nova: LicencaListada | undefined;
       let depois = antes;
-      for (let i = 0; i < 3 && !nova; i++) {
+      let novas: LicencaListada[] = [];
+      for (let i = 0; i < 3; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1500));
         depois = await listar(token, filtroBusca);
-        nova = depois.licencas.find((l) => l.grupo === grupo && !conhecidas.has(`${l.grupo}/${l.filial}`));
+        novas = depois.licencas.filter((l) => l.grupo === grupo && !conhecidas.has(`${l.grupo}/${l.filial}`));
+        if (novas.length >= 1) break;
+      }
+      const alertas: string[] = [];
+      if (filialAlvo != null && codFilial.filial != null && codFilial.filial !== filialAlvo) {
+        alertas.push(`O OEM devolveu a loja ${codFilial.filial} ao atualizar a matriz ${filialAlvo}: pode ter criado uma loja a mais.`);
+      }
+      if (novas.length > 1) {
+        alertas.push(`Nasceram ${novas.length} lojas no grupo ${grupo} (${novas.map((n) => n.filial).join(", ")}), era para ser uma. Desative a que sobrou no portal.`);
       }
 
       return Response.json({
-        ok: true,
+        ok: filialFinal != null,
         grupo_codigo: grupo,
-        filial_codigo: nova?.filial ?? null,
-        // Sem a filial na listagem, a licença EXISTE no OEM (201) mas o código
-        // ainda não apareceu. O DoctorSaaS não pode criar outra: tem que
-        // esperar o espelho ou buscar de novo.
-        confirmada_na_listagem: !!nova,
-        resposta_grupo: respostaGrupo,
-        resposta_filial: respostaFilial,
+        filial_codigo: filialFinal,
+        confirmada_na_listagem: novas.some((n) => n.filial === filialFinal),
+        alerta: alertas.length ? alertas.join(" ") : null,
+        resposta_grupo: semSegredos(respostaGrupo),
+        resposta_filial: semSegredos(respostaFilial),
         payload_filial: payloadFilial,
         listadas_depois: depois.licencas,
         duracaoMs: Date.now() - inicio,
