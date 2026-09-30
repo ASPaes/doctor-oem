@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import type { Cliente, Modulo, Licenca } from "@/lib/mock-data";
@@ -74,7 +75,8 @@ export const gerarChaveIntegracao = createServerFn({ method: "POST" })
       "oem_live_" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.from("oem_api_chaves").insert({
+    const bancoExterno = supabaseAdmin as SupabaseClient<any>;
+    const { error } = await bancoExterno.from("oem_api_chaves").insert({
       tenant_id: data.tenantId,
       nome: data.nome,
       token_hash: await sha256Hex(chave),
@@ -99,7 +101,8 @@ export const revogarChaveIntegracao = createServerFn({ method: "POST" })
     if (!isAdmin) throw new Error("Apenas administradores podem revogar chaves.");
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin
+    const bancoExterno = supabaseAdmin as SupabaseClient<any>;
+    const { error } = await bancoExterno
       .from("oem_api_chaves")
       .update({ ativa: false, revogada_em: new Date().toISOString() })
       .eq("id", data.id)

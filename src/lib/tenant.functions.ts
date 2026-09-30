@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getCookie, setCookie } from "@tanstack/react-start/server";
@@ -145,6 +146,7 @@ export const updateTenant = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { supabase } = context;
+    const bancoExterno = supabase as SupabaseClient<any>;
     const { id, ...patch } = data;
     const { error } = await supabase.from("tenants").update(patch).eq("id", id);
     if (error) throw new Error(error.message);
@@ -158,7 +160,7 @@ export const getTenantOemSettings = createServerFn({ method: "GET" })
     const { supabase } = context;
     // Senha e client_secret NÃO saem daqui: vivem no Vault desde 15/08/2026.
     // A tela precisa saber se existem, não quais são.
-    const { data: row, error } = await supabase
+    const { data: row, error } = await bancoExterno
       .from("tenant_oem_settings")
       .select("oem_api_base_url, oem_api_method, oem_api_username, oem_client_id, vault_secret_id")
       .eq("tenant_id", data.tenantId)
@@ -191,10 +193,11 @@ export const upsertTenantOemSettings = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { supabase } = context;
+    const bancoExterno = supabase as SupabaseClient<any>;
     // A RPC guarda senha e client_secret no Vault e exige admin da empresa.
     // Campo em branco = "não mexer": a tela não consegue mais ler o segredo
     // para reenviá-lo, então salvar só a URL não pode apagar a senha.
-    const { error } = await supabase.rpc("salvar_credenciais_oem", {
+    const { error } = await bancoExterno.rpc("salvar_credenciais_oem", {
       p_tenant_id: data.tenant_id,
       p_base_url: data.oem_api_base_url ?? undefined,
       p_username: data.oem_api_username ?? undefined,

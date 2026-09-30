@@ -494,7 +494,6 @@ async function passoListagem(
     if (itens.length) {
       const { error } = await db
         .from("oem_sync_fila")
-        // @ts-expect-error — payload dinâmico, validado em runtime
         .upsert(itens, {
           onConflict: "run_id,empresa_codigo,filial_codigo",
           ignoreDuplicates: true,
@@ -673,7 +672,6 @@ async function passoDetalhe(
     if (linhas.length) {
       const { error } = await db
         .from("clientes_oem")
-        // @ts-expect-error — payload dinâmico, validado em runtime
         .upsert(linhas.map((l) => l.linha), { onConflict: "tenant_id,filial_codigo" });
       if (error) {
         // Um registro ruim derruba o INSERT do lote inteiro. Refaz um a um
@@ -682,7 +680,6 @@ async function passoDetalhe(
         for (const l of linhas) {
           const { error: erroUnico } = await db
             .from("clientes_oem")
-            // @ts-expect-error — payload dinâmico
             .upsert([l.linha], { onConflict: "tenant_id,filial_codigo" });
           if (erroUnico) {
             erros.push({ id: l.item.id, erro: `Gravação: ${erroUnico.message}`.slice(0, 400) });
