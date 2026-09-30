@@ -146,7 +146,6 @@ export const updateTenant = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const bancoExterno = supabase as SupabaseClient<any>;
     const { id, ...patch } = data;
     const { error } = await supabase.from("tenants").update(patch).eq("id", id);
     if (error) throw new Error(error.message);
@@ -158,6 +157,7 @@ export const getTenantOemSettings = createServerFn({ method: "GET" })
   .inputValidator((d) => z.object({ tenantId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
+    const bancoExterno = supabase as SupabaseClient<any>;
     // Senha e client_secret NÃO saem daqui: vivem no Vault desde 15/08/2026.
     // A tela precisa saber se existem, não quais são.
     const { data: row, error } = await bancoExterno
