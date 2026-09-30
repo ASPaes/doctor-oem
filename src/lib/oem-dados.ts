@@ -21,6 +21,7 @@
 // (disparar a carga, salvar credenciais, bloquear licença). Essas são leves.
 // ============================================================================
 import { supabase } from "@/integrations/supabase/client";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Cliente, Modulo, Licenca } from "@/lib/mock-data";
 
 /**
@@ -216,7 +217,8 @@ export type ChaveIntegracao = {
  * tenant) e NUNCA seleciona `token_hash` — a tela não tem o que fazer com ele.
  */
 export async function listarChaves(tenantId: string): Promise<ChaveIntegracao[]> {
-  const { data, error } = await supabase
+  const bancoExterno = supabase as SupabaseClient<any>;
+  const { data, error } = await bancoExterno
     .from("oem_api_chaves")
     .select("id, nome, prefixo, ativa, criada_em, ultimo_uso_em, revogada_em")
     .eq("tenant_id", tenantId)

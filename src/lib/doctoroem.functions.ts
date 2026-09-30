@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { Cliente, Modulo, Licenca, UserAccount, Role } from "@/lib/mock-data";
 
@@ -840,7 +841,8 @@ export function criarTokenHolder(escopo: string, initial = ""): TokenHolder {
 
 export const listUsuarios = createServerFn({ method: "GET" }).handler(
   async (): Promise<UserAccount[]> => {
-    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const supabase = supabaseAdmin as SupabaseClient<any>;
 
     const [{ data: profiles, error: pErr }, { data: usersResp, error: uErr }] =
       await Promise.all([
@@ -892,7 +894,8 @@ export type GatewayEntry = {
 
 export const listGateways = createServerFn({ method: "GET" }).handler(
   async (): Promise<GatewayEntry[]> => {
-    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const supabase = supabaseAdmin as SupabaseClient<any>;
     const { data, error } = await supabase
       .from("developer_gateways")
       .select("id, client_id, api_token_hash, webhook_url, webhook_events, created_at")
@@ -924,7 +927,8 @@ export const createGateway = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data }) => {
-    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const supabase = supabaseAdmin as SupabaseClient<any>;
     // Token gerado server-side; armazenamos só um hash (simulado).
     const raw = `xak_live_${crypto.randomUUID().replace(/-/g, "")}`;
     const hash = await sha256Hex(raw);
@@ -971,7 +975,8 @@ export const listWebhookLogs = createServerFn({ method: "GET" })
       .parse(input),
   )
   .handler(async ({ data }): Promise<WebhookLogEntry[]> => {
-    const { supabaseAdmin: supabase } = await import("@/integrations/supabase/client.server");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const supabase = supabaseAdmin as SupabaseClient<any>;
     let query = supabase
       .from("webhook_logs")
       .select(

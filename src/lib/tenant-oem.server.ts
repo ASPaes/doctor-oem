@@ -13,6 +13,7 @@ import {
   somarTotalModulos,
   type TokenHolder,
 } from "@/lib/doctoroem.functions";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type TenantCreds = {
   baseUrl: string;
@@ -95,7 +96,8 @@ export function buildResumoFallback(
  */
 export async function loadTenantCreds(tenantId: string): Promise<TenantCreds> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data, error } = await supabaseAdmin.rpc("obter_credenciais_oem", {
+  const bancoExterno = supabaseAdmin as SupabaseClient<any>;
+  const { data, error } = await bancoExterno.rpc("obter_credenciais_oem", {
     p_tenant_id: tenantId,
   });
   if (error) throw new Error("obter_credenciais_oem: " + error.message);
