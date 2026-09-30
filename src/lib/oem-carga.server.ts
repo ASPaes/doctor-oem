@@ -48,6 +48,7 @@ import {
   finalizarLog,
   type TenantCreds,
 } from "@/lib/tenant-oem.server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseModulosOficiais, type TokenHolder } from "@/lib/doctoroem.functions";
 
 /**
@@ -159,7 +160,9 @@ type GrupoTC = {
 
 async function admin() {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return supabaseAdmin;
+  // Estas tabelas existem no banco OEM externo, mas não no esquema gerado
+  // automaticamente pela conexão atual do Lovable Cloud.
+  return supabaseAdmin as SupabaseClient<any>;
 }
 
 function inteiro(v: unknown): number | null {
