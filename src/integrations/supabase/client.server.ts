@@ -4,15 +4,19 @@
 // For user-authenticated queries (with RLS), use the auth middleware instead.
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
+import { supabaseUrl, supabaseServiceRoleKey } from '@/lib/supabase-env';
+
+// ⚠️ Editado à mão (29/09/2026): endereço e chave vêm de @/lib/supabase-env, não
+// direto do process.env. Se o Lovable regenerar este arquivo, refaça — o porquê está lá.
 
 function createSupabaseAdminClient() {
-  const SUPABASE_URL = process.env.SUPABASE_URL;
-  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const SUPABASE_URL = supabaseUrl();
+  const SUPABASE_SERVICE_ROLE_KEY = supabaseServiceRoleKey();
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     const missing = [
       ...(!SUPABASE_URL ? ['SUPABASE_URL'] : []),
-      ...(!SUPABASE_SERVICE_ROLE_KEY ? ['SUPABASE_SERVICE_ROLE_KEY'] : []),
+      ...(!SUPABASE_SERVICE_ROLE_KEY ? ['DOCTOROEM_SUPABASE_SERVICE_ROLE_KEY'] : []),
     ];
     const message = `Missing Supabase environment variable(s): ${missing.join(', ')}. Connect Supabase in Lovable Cloud.`;
     console.error(`[Supabase] ${message}`);

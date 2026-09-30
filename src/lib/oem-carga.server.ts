@@ -50,6 +50,7 @@ import {
 } from "@/lib/tenant-oem.server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseModulosOficiais, type TokenHolder } from "@/lib/doctoroem.functions";
+import { supabaseUrl, supabaseServiceRoleKey } from "@/lib/supabase-env";
 
 /**
  * Host documentado do OEM (api.tabletcloud.com.br). É a fonte de leitura E o
@@ -890,10 +891,10 @@ export async function avancarCargaViaEdgeFunction(
   origem: "manual" | "cron" | "carga-inicial" = "manual",
 ): Promise<PassoCarga> {
   const inicio = Date.now();
-  const url = process.env.SUPABASE_URL;
-  const chave = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = supabaseUrl();
+  const chave = supabaseServiceRoleKey();
   if (!url || !chave) {
-    throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no servidor.");
+    throw new Error("SUPABASE_URL / DOCTOROEM_SUPABASE_SERVICE_ROLE_KEY ausentes no servidor.");
   }
 
   const base = url.replace(/\/+$/, "");

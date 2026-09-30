@@ -3,14 +3,16 @@ import { createMiddleware } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from './types'
+import { supabaseUrl, supabasePublishableKey } from '@/lib/supabase-env'
 
-
+// ⚠️ Editado à mão (29/09/2026): endereço e chave vêm de @/lib/supabase-env, não
+// direto do process.env. Se o Lovable regenerar este arquivo, refaça — o porquê está lá.
 
 export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server(
   async ({ next }) => {
-    
-    const SUPABASE_URL = process.env.SUPABASE_URL;
-    const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY;
+
+    const SUPABASE_URL = supabaseUrl();
+    const SUPABASE_PUBLISHABLE_KEY = supabasePublishableKey();
 
     if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
       const missing = [
