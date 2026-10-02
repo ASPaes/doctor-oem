@@ -33,6 +33,12 @@ verify_jwt = false
 [functions.oem-licenca-modulo]
 verify_jwt = false
 
+# Por que o custo de cada filial mudou entre dois meses (DEM-0517): compara
+# o faturamento modulo a modulo e separa upsell, downsell, reajuste e
+# consumo. Leitura pura. Mesma autenticacao por x-api-key das irmas.
+[functions.oem-variacao-mensal]
+verify_jwt = false
+
 # Cria licenca NOVA no OEM (grupo avulso ou filial em grupo existente).
 # Acoes listas/buscar sao leitura; criar com simular=true nao envia nada.
 # Mesma autenticacao por x-api-key das irmas: quem chama e o DoctorSaaS.
