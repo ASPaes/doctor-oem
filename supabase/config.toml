@@ -44,3 +44,10 @@ verify_jwt = false
 # Mesma autenticacao por x-api-key das irmas: quem chama e o DoctorSaaS.
 [functions.oem-licenca-criar]
 verify_jwt = false
+
+# Liga uma empresa ao OEM a partir do DoctorSaaS (DEM-0516): cria a empresa,
+# grava as credenciais e emite a chave. Autentica por segredo de plataforma
+# (x-provisionamento-secret, comparado dentro do banco) ou pela chave da
+# empresa (x-api-key). Quem chama e outro sistema: verify_jwt = false.
+[functions.oem-provisionar]
+verify_jwt = false
