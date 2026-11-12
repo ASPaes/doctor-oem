@@ -315,8 +315,12 @@ function CargaInicialButton({ tenantId, tenantNome }: { tenantId: string; tenant
         if (!confirm(`Disparar carga inicial para ${tenantNome}? A sincronização roda em segundo plano e pode levar vários minutos.`)) return;
         try {
           setPending(true);
-          await run({ data: { tenantId, origem: "carga-inicial" } });
-          toast.success(`Carga inicial iniciada para ${tenantNome}. Acompanhe em Configurações.`);
+          const passo = await run({ data: { tenantId, origem: "carga-inicial" } });
+          if (passo.fase === "erro") {
+            toast.error(`Carga inicial de ${tenantNome} não começou: ${passo.mensagem}`, { duration: 15000 });
+          } else {
+            toast.success(`Carga inicial iniciada para ${tenantNome}. Acompanhe em Configurações.`);
+          }
         } catch (e) {
           toast.error(e instanceof Error ? e.message : "Falha ao iniciar carga");
         } finally {

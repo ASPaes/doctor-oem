@@ -929,7 +929,10 @@ export async function avancarCargaViaEdgeFunction(
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
   return {
     runId: null,
-    fase: (r.fase as PassoCarga["fase"]) ?? "detalhando",
+    // status "erro" sem fase (versões antigas da função) era lido como
+    // "detalhando": a tela dizia "carga iniciada" para uma carga que já tinha
+    // falhado (Look Sistemas, 12/11/2026).
+    fase: r.status === "erro" ? "erro" : ((r.fase as PassoCarga["fase"]) ?? "detalhando"),
     concluido: r.concluido === true || r.status === "ignorado",
     enfileirados: n(r.enfileirados),
     processados: n(r.processados),
@@ -954,6 +957,14 @@ export async function cancelarCargaOem(tenantId: string): Promise<{ cancelados: 
     })
     .eq("tenant_id", tenantId)
     .in("fase", ["listando", "detalhando"])
-    .select("id");
+    .select("id, log_id");
+  // O log também fecha: sem isto ele ficava "processando" para sempre.
+  const logIds = (data ?? []).map((r: { log_id: string | null }) => r.log_id).filter(Boolean) as string[];
+  if (logIds.length) {
+    await db.from("oem_sync_logs")
+      .update({ status: "erro", mensagem: "Cancelado manualmente." })
+      .in("id", logIds)
+      .eq("status", "processando");
+  }
   return { cancelados: (data ?? []).length };
 }

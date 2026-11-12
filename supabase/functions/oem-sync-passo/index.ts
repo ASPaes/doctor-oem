@@ -67,6 +67,25 @@ class RateLimitOem extends Error {
   }
 }
 
+// ERRO QUE NÃO SE RESOLVE TENTANDO DE NOVO
+//
+// 12/11/2026. A carga inicial da Look Sistemas ficou 10+ minutos em
+// "processando" com 0/0: o OEM aceitava o login (token emitido) e respondia
+// 401 na listagem `minhaslicencas` — usuário sem acesso de parceiro. O erro
+// voltava no JSON do cron a cada 3 minutos e não era gravado em lugar nenhum:
+// run parado em "listando", log em "processando", tela sem motivo.
+//
+// Credencial recusada ou sem permissão não melhora sozinha. Esse tipo de erro
+// ENCERRA a carga (run e log em "erro", com a mensagem para quem vai agir) e o
+// cron só volta a tentar depois do intervalo configurado. Erro transitório
+// (rede, 5xx) continua tentando, mas a última falha também fica visível no log.
+class ErroPermanenteOem extends Error {
+  constructor(mensagem: string) {
+    super(mensagem);
+    this.name = "ErroPermanenteOem";
+  }
+}
+
 type Creds = {
   baseUrl: string;
   username: string;
@@ -106,6 +125,7 @@ type RunRow = {
   inseridos: number;
   atualizados: number;
   falhas: number;
+  iniciado_em: string;
 };
 
 const inteiro = (v: unknown): number | null => {
@@ -158,6 +178,12 @@ async function criarHolder(base: string, creds: Creds): Promise<Holder> {
     });
     if (!resp.ok) {
       const t = await resp.text().catch(() => "");
+      if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
+        throw new ErroPermanenteOem(
+          `O OEM recusou o login (HTTP ${resp.status}). Confira usuário, senha, client_id e ` +
+            `client_secret em Configurações › Conexão OEM. ${t.slice(0, 180)}`.trim(),
+        );
+      }
       throw new Error(`Autenticação em ${base} falhou (HTTP ${resp.status}): ${t.slice(0, 180)}`);
     }
     const j = await resp.json();
@@ -203,6 +229,15 @@ function normalizarModulo(m: Record<string, unknown>, i: number): Record<string,
 async function buscarPagina(h: Holder, pagina: number) {
   const alvo = `listagem página ${pagina}`;
   const r = await oemGet(h, `${LEITURA_BASE}/licenciamento/minhaslicencas/${pagina}/`, alvo);
+  // O oemGet já renovou o token uma vez: 401/403 aqui é falta de permissão do
+  // usuário, não token vencido.
+  if (r.status === 401 || r.status === 403) {
+    throw new ErroPermanenteOem(
+      `O OEM aceitou o login, mas recusou a lista de licenças (HTTP ${r.status} na ${alvo}). ` +
+        "O usuário cadastrado não tem acesso de parceiro (Minhas licenças). " +
+        "Cadastre o usuário principal da revenda no OEM em Configurações › Conexão OEM.",
+    );
+  }
   if (!r.ok) throw new Error(`Listagem HTTP ${r.status} na ${alvo}.`);
   const j = await r.json().catch(() => null);
   if (!j || !Array.isArray(j.data)) throw new Error(`Listagem inválida na ${alvo}.`);
@@ -379,6 +414,30 @@ function aplicarFaturamento(
   return { custo: Math.round(custo * 100) / 100, modulos: saida };
 }
 
+// O CNPJ DA LICENÇA É O DA FILIAL — a listagem só tem o do grupo.
+//
+// 24/08/2026. A listagem `minhaslicencas` traz `cpf_cnpj` no GRUPO; a filial
+// dentro dela não tem esse campo. Como a enumeração lê `f.cpf_cnpj ?? g.cpf_cnpj`,
+// toda filial ficava com o CNPJ da matriz. Medido no espelho do DoctorSaaS:
+// 137 grupos com mais de uma filial e ZERO com CNPJ variando entre elas — não
+// é rede com CNPJ único, é o campo do grupo repetido nas 2.573 linhas.
+//
+// A conta aparecia na conferência do DoctorSaaS: a DIONE PIZZA (32801/39751)
+// acusava "CNPJ diferente dos dois lados" comparando o CNPJ do grupo no OEM
+// com o da filial que está na ficha do cliente — os dois certos, cada um de um
+// nível diferente.
+//
+// O detalhe da licença no pdvlegal já traz o certo (`filial.cnpj`, formatado:
+// "23.323.405/0001-66") e esta chamada já era feita para toda filial em toda
+// carga. O dado estava aqui e era descartado.
+const soDigitos = (v: unknown): string => String(v ?? "").replace(/[^0-9]/g, "");
+
+/** CNPJ (14) ou CPF (11). Outro tamanho é lixo e não vira cadastro. */
+function documentoValido(v: unknown): string | null {
+  const d = soDigitos(v);
+  return d.length === 14 || d.length === 11 ? d : null;
+}
+
 async function buscarBloqueio(creds: Creds, h: Holder, grupo: number, filial: number) {
   const alvo = `licença ${grupo}/${filial}`;
   const r = await oemGet(h, `${creds.baseUrl}/v1/licenciamento/${grupo}/${filial}`, alvo);
@@ -389,6 +448,9 @@ async function buscarBloqueio(creds: Creds, h: Holder, grupo: number, filial: nu
     bloqueado: f.bloqueado === true,
     usuarios: inteiro(f.usuarios),
     pdvComandas: inteiro(f.pdvComandas),
+    // Nomes tolerados porque os dois lados da mesma rota não usam o mesmo: o
+    // GET do pdvlegal responde `cnpj`, o POST recebe `cpfCnpj`.
+    cnpj: documentoValido(f.cnpj ?? f.cpfCnpj ?? f.cpf_cnpj ?? f.cnpjloja),
   };
 }
 
@@ -399,10 +461,10 @@ async function buscarBloqueio(creds: Creds, h: Holder, grupo: number, filial: nu
 async function carregarCreds(db: SupabaseClient, tenantId: string): Promise<Creds> {
   const { data, error } = await db.rpc("obter_credenciais_oem", { p_tenant_id: tenantId });
   if (error) throw new Error(`obter_credenciais_oem: ${error.message}`);
-  if (!data) throw new Error("Credenciais OEM não cadastradas para esta empresa.");
+  if (!data) throw new ErroPermanenteOem("Credenciais OEM não cadastradas para esta empresa.");
   const c = data as Record<string, string | null>;
   const faltando = ["username", "password", "client_id", "client_secret"].filter((k) => !c[k]);
-  if (faltando.length) throw new Error(`Credenciais OEM incompletas: ${faltando.join(", ")}.`);
+  if (faltando.length) throw new ErroPermanenteOem(`Credenciais OEM incompletas: ${faltando.join(", ")}.`);
   return {
     baseUrl: (c.base_url ?? "https://api.pdvlegal.com.br").replace(/\/+$/, ""),
     username: c.username!,
@@ -590,7 +652,10 @@ async function montarLinha(
     tenant_id: tenantId,
     empresa_codigo: String(codGrupo),
     filial_codigo: String(codFilial),
-    cnpj_cpf: resumo.cpf_cnpj ?? `${codGrupo}/${codFilial}`,
+    // Filial primeiro, grupo só como último recurso — ver o bloco em
+    // buscarBloqueio. Detalhe sem CNPJ mantém o que a listagem deu, em vez de
+    // gravar vazio: registro degradado é pior que registro velho (regra 1).
+    cnpj_cpf: licenca.cnpj ?? resumo.cpf_cnpj ?? `${codGrupo}/${codFilial}`,
     nome_fantasia: resumo.nomefilial ?? `Empresa ${codGrupo}/${codFilial}`,
     razao_social: resumo.nomefilial ?? null,
     grupo_economico: resumo.nomegrupo ?? null,
@@ -721,9 +786,50 @@ async function passoDetalhe(
   return { processados: okIds.length + erros.length, inseridos, atualizados, falhas, barrado };
 }
 
+/**
+ * Grava a falha onde a tela olha (run + log). Sem isto o erro só existia no
+ * JSON devolvido ao cron, e a carga ficava "processando" para sempre.
+ */
+async function registrarFalha(db: SupabaseClient, run: RunRow, e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  const agora = new Date();
+  if (e instanceof ErroPermanenteOem) {
+    await salvarRun(db, run.id, { fase: "erro", erro: msg, finalizado_em: agora.toISOString() });
+    if (run.log_id) {
+      const iniciado = run.iniciado_em ? new Date(run.iniciado_em).getTime() : NaN;
+      await db.from("oem_sync_logs").update({
+        status: "erro",
+        mensagem: msg,
+        duracao_ms: Number.isFinite(iniciado) ? agora.getTime() - iniciado : null,
+      }).eq("id", run.log_id);
+    }
+    return;
+  }
+  // Transitório: a carga continua viva e o cron tenta de novo, mas quem olha
+  // a tela vê por que ela não anda.
+  await salvarRun(db, run.id, { erro: msg });
+  if (run.log_id) {
+    const hora = agora.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" });
+    await db.from("oem_sync_logs").update({
+      mensagem: `Tentativa das ${hora} falhou: ${msg} Nova tentativa automática em alguns minutos.`,
+    }).eq("id", run.log_id);
+  }
+}
+
 async function avancar(db: SupabaseClient, tenantId: string, origem: string) {
   const inicio = Date.now();
   const run = await obterOuCriarRun(db, tenantId, origem);
+  try {
+    return await avancarRun(db, tenantId, run, inicio);
+  } catch (e) {
+    await registrarFalha(db, run, e).catch((g) =>
+      console.error("[oem-sync] registrar falha:", g instanceof Error ? g.message : g)
+    );
+    throw e;
+  }
+}
+
+async function avancarRun(db: SupabaseClient, tenantId: string, run: RunRow, inicio: number) {
   const creds = await carregarCreds(db, tenantId);
   const tc = await criarHolder(LEITURA_BASE, creds);
 
@@ -825,8 +931,11 @@ Deno.serve(async (req) => {
           .eq("tenant_id", tenantId).in("fase", ["listando", "detalhando"]).limit(1).maybeSingle();
         if (!emAndamento && origem === "cron") {
           const horas = Number((cfgs ?? []).find((c: any) => String(c.tenant_id) === tenantId)?.intervalo_horas ?? 24);
+          // "erro" também conta: carga encerrada por credencial recusada não
+          // pode virar uma tentativa nova (e um log novo) a cada 3 minutos.
+          // O botão da tela (origem manual) não passa por aqui.
           const { data: ultimo } = await db.from("oem_sync_logs").select("executado_em")
-            .eq("tenant_id", tenantId).eq("status", "sucesso")
+            .eq("tenant_id", tenantId).in("status", ["sucesso", "erro"])
             .order("executado_em", { ascending: false }).limit(1).maybeSingle();
           if (ultimo?.executado_em) {
             const decorrido = Date.now() - new Date(ultimo.executado_em).getTime();
@@ -846,7 +955,8 @@ Deno.serve(async (req) => {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[oem-sync] tenant ${tenantId}:`, msg);
-        resultados.push({ tenant: t.nome, status: "erro", mensagem: msg });
+        // `fase` explícita: sem ela a tela lia o resultado como "em andamento".
+        resultados.push({ tenant: t.nome, status: "erro", fase: "erro", concluido: false, mensagem: msg });
       }
     }
 

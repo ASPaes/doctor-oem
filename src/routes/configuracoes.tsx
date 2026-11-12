@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Plug, RefreshCw, Save, Clock, KeyRound, PlugZap, Zap } from "lucide-react";
@@ -538,8 +538,14 @@ function ConfiguracoesPage() {
             <TableBody>
               {settings.logs.map((log) => {
                 const { data, hora } = formatDataHora(log.executadoEm);
+                // Motivo visível quando a carga falhou ou está falhando: só o
+                // badge "processando" escondia um 401 por 10+ minutos.
+                const falhou = log.status === "erro";
+                const tentativaFalhou = log.status === "processando" && /falhou/i.test(log.mensagem ?? "");
+                const motivo = (falhou || tentativaFalhou) && log.mensagem ? log.mensagem : null;
                 return (
-                  <TableRow key={log.id}>
+                  <Fragment key={log.id}>
+                  <TableRow className={motivo ? "border-b-0" : undefined}>
                     <TableCell className="tabular-nums">{data}</TableCell>
                     <TableCell className="tabular-nums">{hora}</TableCell>
                     <TableCell className="capitalize">{log.origem}</TableCell>
@@ -556,6 +562,20 @@ function ConfiguracoesPage() {
                       {log.duracaoMs == null ? "—" : `${(log.duracaoMs / 1000).toFixed(1)}s`}
                     </TableCell>
                   </TableRow>
+                  {motivo && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={7} className="pt-0 pb-3">
+                        <p
+                          className={`text-xs leading-relaxed whitespace-normal break-words ${
+                            falhou ? "text-destructive" : "text-amber-500"
+                          }`}
+                        >
+                          {motivo}
+                        </p>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  </Fragment>
                 );
               })}
             </TableBody>
