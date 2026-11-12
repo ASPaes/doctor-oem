@@ -2,12 +2,15 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
+import { supabaseUrl, supabasePublishableKey } from '@/lib/supabase-env';
 
+// ⚠️ Editado à mão (12/11/2026): endereço e chave vêm de @/lib/supabase-env,
+// fixos no código. Pelas VITE_* o preview do Lovable abriu no banco do Lovable
+// Cloud (Digiup, Delvale lixo, tudo zerado). Se o Lovable regenerar este
+// arquivo, refaça — o porquê está em supabase-env.ts.
 function createSupabaseClient() {
-  // Use import.meta.env for client-side (Vite build-time replacement)
-  // Fall back to process.env for SSR (server-side rendering)
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+  const SUPABASE_URL = supabaseUrl();
+  const SUPABASE_PUBLISHABLE_KEY = supabasePublishableKey();
 
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
     const missing = [
