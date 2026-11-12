@@ -11,12 +11,23 @@
 // Por isso o servidor lê primeiro as VITE_* do build (as mesmas do navegador) e
 // a service role de um segredo com nome próprio, que o Lovable não sobrescreve.
 
+// 12/11/2026: as VITE_* também deixaram de ser confiáveis no servidor. Depois
+// de um Publish, TODA server function passou a responder "Unauthorized: Invalid
+// token" em todas as empresas, com o navegador ainda no DoctorOEM (token ES256,
+// kid 7f7a9ee3 = furoh). O build do Lovable passou a injetar as VITE_SUPABASE_*
+// do Cloud no lado servidor. Endereço e chave publishable são PÚBLICOS (estão
+// no .env commitado e no bundle do navegador), então ficam fixos aqui: nenhuma
+// variável de ambiente decide para qual banco o servidor olha.
+const DOCTOROEM_SUPABASE_URL = "https://furohpfhukwajhvnnbiw.supabase.co";
+const DOCTOROEM_SUPABASE_PUBLISHABLE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1cm9ocGZodWt3YWpodm5uYml3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NzMxOTYsImV4cCI6MjA5NjU0OTE5Nn0.5qXujfD16TtztaEL3lrp7fbwzhjypAZgBgvXzlILPgE";
+
 export function supabaseUrl(): string | undefined {
-  return import.meta.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  return DOCTOROEM_SUPABASE_URL;
 }
 
 export function supabasePublishableKey(): string | undefined {
-  return import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+  return DOCTOROEM_SUPABASE_PUBLISHABLE_KEY;
 }
 
 // `DOCTOROEM_SUPABASE_SERVICE_ROLE_KEY` é o segredo no Lovable (criado em 09/06 para este
